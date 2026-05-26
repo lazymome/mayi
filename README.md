@@ -10,6 +10,7 @@
 *   **性能专项优化**: 针对超大规模节点图和数千条历史记录进行了渲染优化，支持“极致”性能模式。
 *   **数据持久化**: 彻底解决了 Blob URL 失效问题，所有资产自动同步至本地存储，支持 ZIP 批量导出。
 *   **模型库与请求模板**: 模型能力统一管理，支持请求模板预览/覆盖，便于供应商模型对接。
+*   **多供应商协议配置**: API 设置支持单个 Provider 管理多个模型，模型可单独指定 Provider，并可按 Provider 或模型覆盖 `openai`、`openai-response`、`gemini`、`modelscope` 等协议类型。
 *   **模型库说明书**: 统一配置与测试说明见 [**模型库说明**](./model-template-readme.md)。
 *   **本地服务说明书**:  接收器说明见 [**本地服务说明**](./localserver/LocalServer_README.md) 本地 ComfyUI_Proxy参见 [**ComfyUI 代理说明**](./localserver/Middleware_README-ComfyUI.md)
 *   **Docker 部署说明**: 前端 + 本地接收器双容器部署见 [**Docker_README**](./localserver/Docker_README.md)。

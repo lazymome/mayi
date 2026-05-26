@@ -5,6 +5,7 @@
 #### 2026-05-26 开发中改动（3.8.8-rc7）
 - **[新增]** 生图模型库新增 `gpt-image-2` 默认配置，内置 OpenAI Image API 常用尺寸与 `quality/background/moderation/output_format/output_compression` 自定义参数。
 - **[新增]** GPT Image 2 生图接口适配：无参考图走 `/v1/images/generations` JSON，有参考图或蒙版走 `/v1/images/edits` multipart。
+- **[新增]** API 设置支持统一协议类型（`openai` / `openai-response` / `gemini` / `modelscope`）、Provider 多模型管理，以及单模型 Provider/协议覆盖。
 
 #### 2026-02-12 正式发布（3.8.7）
 - **[版本]** `3.8.7-rc8` 验收通过后提升为正式版 `3.8.7`，重新生成正式构建产物 `Tapnow Studio-V3.8.7.html`。
