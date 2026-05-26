@@ -2,6 +2,10 @@
 
 本文档记录了 Tapnow Studio 近期的所有关键更新、修复和功能改进。
 
+#### 2026-05-26 开发中改动（3.8.8-rc7）
+- **[新增]** 生图模型库新增 `gpt-image-2` 默认配置，内置 OpenAI Image API 常用尺寸与 `quality/background/moderation/output_format/output_compression` 自定义参数。
+- **[新增]** GPT Image 2 生图接口适配：无参考图走 `/v1/images/generations` JSON，有参考图或蒙版走 `/v1/images/edits` multipart。
+
 #### 2026-02-12 正式发布（3.8.7）
 - **[版本]** `3.8.7-rc8` 验收通过后提升为正式版 `3.8.7`，重新生成正式构建产物 `Tapnow Studio-V3.8.7.html`。
 - **[修复]** `debug13-b` 智能分镜镜头串写：`isSameShotId` 从 token 模糊匹配收敛为严格匹配（保留纯数字 ID 兼容），修复单镜头更新扩散到全镜头的问题。

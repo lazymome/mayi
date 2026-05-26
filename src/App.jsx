@@ -1827,6 +1827,7 @@ const DEFAULT_API_CONFIGS = [
     // Image Models
     { id: 'MJ V6', provider: 'midjourney', type: 'Image' },
     { id: 'gpt-4o-image', provider: 'openai', type: 'Image' },
+    { id: 'gpt-image-2', provider: 'openai', type: 'Image' },
     { id: 'gemini-3-pro-image-preview', provider: 'yunwu', type: 'Image' },
     { id: 'jimeng-4.5', provider: 'jimeng', type: 'Image' },
     { id: 'jimeng-4.1', provider: 'jimeng', type: 'Image' },
@@ -2213,6 +2214,7 @@ const DEFAULT_MODEL_LIBRARY = [
         .filter((config) => !['Tongyi-MAI/Z-Image-Turbo'].includes(config.id))
         .map((config) => {
             const isVideo = config.type === 'Video';
+            const isGptImage2 = config.id === 'gpt-image-2';
             const supportsFirstLastFrame = isVideo && /veo3\.1/i.test(config.id);
             const supportsHD = isVideo && /sora-2/i.test(config.id);
             const entryBase = {
@@ -2224,10 +2226,10 @@ const DEFAULT_MODEL_LIBRARY = [
                 imageRouteMode: 'auto',
                 imageBatchMode: IMAGE_BATCH_MODE_PARALLEL_AGGREGATE,
                 nativeMultiImageMode: IMAGE_NATIVE_MULTI_IMAGE_MODE_AUTO,
-                ratioLimits: null,
-                defaultRatio: '',
-                resolutionLimits: null,
-                defaultResolution: '',
+                ratioLimits: isGptImage2 ? ['1:1', '3:2', '2:3'] : null,
+                defaultRatio: isGptImage2 ? '1:1' : '',
+                resolutionLimits: isGptImage2 ? ['1024x1024', '1536x1024', '1024x1536'] : null,
+                defaultResolution: isGptImage2 ? '1024x1024' : '',
                 defaultImageConcurrency: 1,
                 durations: Array.isArray(config.durations) ? config.durations : null,
                 defaultDuration: '',
@@ -2236,7 +2238,13 @@ const DEFAULT_MODEL_LIBRARY = [
                 supportsFirstLastFrame,
                 supportsHD,
                 apiType: DEFAULT_PROVIDERS[config.provider]?.apiType || 'openai',
-                customParams: [],
+                customParams: isGptImage2 ? [
+                    { id: 'gpt-image-2-quality', name: 'quality', values: ['auto', 'low', 'medium', 'high'], defaultValue: 'auto', override: true },
+                    { id: 'gpt-image-2-background', name: 'background', values: ['auto', 'transparent', 'opaque'], defaultValue: 'auto', override: true },
+                    { id: 'gpt-image-2-moderation', name: 'moderation', values: ['auto', 'low'], defaultValue: 'auto', override: true },
+                    { id: 'gpt-image-2-output-format', name: 'output_format', values: ['png', 'jpeg', 'webp'], defaultValue: 'png', override: true },
+                    { id: 'gpt-image-2-output-compression', name: 'output_compression', values: ['100', '90', '80', '70'], defaultValue: '', override: true }
+                ] : [],
                 asyncConfig: null,
                 requestChain: null,
                 transport: TRANSPORT_HTTP_JSON,
@@ -2356,6 +2364,14 @@ const getAntigravitySizeParam = (ratio, sizeStr) => {
     }
     const normalizedSize = String(sizeStr || '').trim();
     return normalizedSize || '1:1';
+};
+const getGptImage2SizeParam = (ratio, sizeStr) => {
+    const normalizedSize = String(sizeStr || '').trim();
+    if (['1024x1024', '1536x1024', '1024x1536'].includes(normalizedSize)) return normalizedSize;
+    const normalizedRatio = String(ratio || '').trim();
+    if (normalizedRatio === '3:2') return '1536x1024';
+    if (normalizedRatio === '2:3') return '1024x1536';
+    return '1024x1024';
 };
 const isExplicitImageResolution = (value) => {
     const raw = String(value || '').trim();
@@ -16680,6 +16696,7 @@ function TapnowApp() {
                 // --- 模型特征定义 (融合 V2.5-3 和 V2.5-4) ---
                 // isBananaLike: 用于旧版/通用香蕉模型 (排除 nano-banana-2)
                 const isBananaLike = (modelId.includes('banana') || modelId.includes('edit') || modelId.includes('qwen')) && !(modelId.includes('nano-banana-2') || (config?.modelName ?? '').includes('nano-banana-2'));
+                const isGptImage2 = modelId === 'gpt-image-2' || (config?.modelName ?? '') === 'gpt-image-2';
                 const isOpenAIImage = modelId.includes('gpt') || (config?.modelName ?? '').includes('gpt-image') || (config?.provider ?? '').toLowerCase().includes('gpt-4o image');
                 const isFluxKontext = modelId.includes('flux') || (config?.modelName ?? '').includes('flux-kontext');
                 // isNanoBanana2: V2.5-4 新增的异步模型标识
@@ -16906,21 +16923,53 @@ function TapnowApp() {
                 // 3. OpenAI Image
                 else if (isOpenAIImage) {
                     let finalPrompt = prompt || '';
-                    const jsonBody = {
-                        model: config?.modelName || 'gpt-4o-image',
-                        prompt: finalPrompt,
-                        n: requestedImageCountForSubmit,
-                        size: sizeStr,
-                        response_format: 'url'
-                    };
-                    if (aspect) jsonBody.aspect_ratio = aspect;
+                    const modelName = config?.modelName || (isGptImage2 ? 'gpt-image-2' : 'gpt-4o-image');
+                    if (isGptImage2) {
+                        const gptImage2Size = getGptImage2SizeParam(ratio, sizeStr);
+                        const refs = connectedImages.length > 0 ? connectedImages : (sourceImage ? [sourceImage] : []);
+                        if (refs.length > 0 || finalMaskBlob) {
+                            endpoint = `${baseUrl}/v1/images/edits`;
+                            useMultipart = true;
+                            const formData = new FormData();
+                            formData.append('model', modelName);
+                            formData.append('prompt', finalPrompt || 'enhance');
+                            formData.append('n', String(requestedImageCountForSubmit));
+                            formData.append('size', gptImage2Size);
+                            const blobPromises = refs.map(url => getBlobFromUrl(url, { useProxy: resolveSourceProxy(url) }));
+                            const blobs = await Promise.all(blobPromises);
+                            blobs.forEach((blob, i) => {
+                                formData.append('image', blob, `input_${i + 1}.png`);
+                            });
+                            if (finalMaskBlob) {
+                                formData.append('mask', finalMaskBlob, 'mask.png');
+                            }
+                            payload = formData;
+                        } else {
+                            endpoint = `${baseUrl}/v1/images/generations`;
+                            payload = {
+                                model: modelName,
+                                prompt: finalPrompt,
+                                n: requestedImageCountForSubmit,
+                                size: gptImage2Size
+                            };
+                        }
+                    } else {
+                        const jsonBody = {
+                            model: modelName,
+                            prompt: finalPrompt,
+                            n: requestedImageCountForSubmit,
+                            size: sizeStr,
+                            response_format: 'url'
+                        };
+                        if (aspect) jsonBody.aspect_ratio = aspect;
 
-                    if (connectedImages.length > 0) {
-                        const b64Promises = connectedImages.map(url => getBase64FromUrl(url, { useProxy: resolveSourceProxy(url) }));
-                        const b64s = await Promise.all(b64Promises);
-                        jsonBody.image = b64s.map(b => `data:image/png;base64,${b}`);
+                        if (connectedImages.length > 0) {
+                            const b64Promises = connectedImages.map(url => getBase64FromUrl(url, { useProxy: resolveSourceProxy(url) }));
+                            const b64s = await Promise.all(b64Promises);
+                            jsonBody.image = b64s.map(b => `data:image/png;base64,${b}`);
+                        }
+                        payload = jsonBody;
                     }
-                    payload = jsonBody;
                 }
                 // 4. [关键] Nano Banana 2 (V2.5-4 核心逻辑，包含异步处理)
                 else if (isNanoBanana2) {
