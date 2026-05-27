@@ -44,5 +44,5 @@ __pycache__/
 *.swo
 
 # 测试和开发文件
-scripts/
+# scripts/ contains build-time release helpers used by npm run build.
 codex.md

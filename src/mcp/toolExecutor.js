@@ -8,10 +8,43 @@ import {
 const getViewportFallback = (value, fallback) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
 
+const summarizeNode = (node = {}) => ({
+  id: node.id,
+  type: node.type,
+  x: node.x,
+  y: node.y,
+  width: node.width,
+  height: node.height,
+  title: node.title || node.label || node.name || node.settings?.title,
+  text:
+    typeof node.text === "string"
+      ? node.text.slice(0, 200)
+      : typeof node.content === "string"
+      ? node.content.slice(0, 200)
+      : undefined,
+  hasSource: Boolean(node.src || node.url || node.imageUrl || node.videoUrl),
+  settingsKeys:
+    node.settings && typeof node.settings === "object"
+      ? Object.keys(node.settings).slice(0, 20)
+      : [],
+});
+
+const getSelectedNodeIdList = (selectedNodeIds, selectedNodeId) => {
+  const ids = selectedNodeIds instanceof Set ? Array.from(selectedNodeIds) : [];
+  if (selectedNodeId) ids.push(selectedNodeId);
+  return [...new Set(ids.filter(Boolean))];
+};
+
 const createReadToolHandlers = (context) => {
   const {
     apiConfigs = [],
     history = [],
+    nodes = [],
+    connections = [],
+    selectedNodeId = null,
+    selectedNodeIds = new Set(),
+    view = null,
+    batchQueue = [],
     resolveApiConfig = (item) => item,
     resolveHistoryUrl = () => "",
   } = context;
@@ -54,6 +87,54 @@ const createReadToolHandlers = (context) => {
         }));
       return createTapnowActionResult(true, { items, count: items.length });
     },
+    list_nodes: async (args) => {
+      const limit = Math.max(1, Math.min(200, normalizeToolNumber(args.limit, 50)));
+      const type = normalizeToolString(args.type, "");
+      const items = nodes
+        .filter((node) => !type || node.type === type)
+        .slice(0, limit)
+        .map(summarizeNode);
+      return createTapnowActionResult(true, {
+        items,
+        count: items.length,
+        total: nodes.length,
+      });
+    },
+    get_canvas_summary: async () => {
+      const byType = nodes.reduce((acc, node) => {
+        const type = node?.type || "unknown";
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {});
+      return createTapnowActionResult(true, {
+        nodesCount: nodes.length,
+        connectionsCount: connections.length,
+        selectedNodeIds: getSelectedNodeIdList(selectedNodeIds, selectedNodeId),
+        byType,
+        view,
+      });
+    },
+    get_selected_nodes: async () => {
+      const selected = new Set(getSelectedNodeIdList(selectedNodeIds, selectedNodeId));
+      const items = nodes.filter((node) => selected.has(node.id)).map(summarizeNode);
+      return createTapnowActionResult(true, { items, count: items.length });
+    },
+    find_nodes_by_type: async (args) => {
+      const type = normalizeToolString(args.type);
+      if (!type) throw new Error("type 不能为空");
+      const limit = Math.max(1, Math.min(200, normalizeToolNumber(args.limit, 50)));
+      const items = nodes.filter((node) => node.type === type).slice(0, limit).map(summarizeNode);
+      return createTapnowActionResult(true, { items, count: items.length, type });
+    },
+    get_project_status: async () =>
+      createTapnowActionResult(true, {
+        nodesCount: nodes.length,
+        connectionsCount: connections.length,
+        historyCount: history.length,
+        batchQueueCount: Array.isArray(batchQueue) ? batchQueue.length : 0,
+        selectedNodeIds: getSelectedNodeIdList(selectedNodeIds, selectedNodeId),
+        view,
+      }),
   };
 };
 

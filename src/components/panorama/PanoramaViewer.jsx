@@ -67,6 +67,9 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
   const meshRef = useRef(null);
   const cameraStateRef = useRef(normalizeCamera(camera));
   const dragRef = useRef(null);
+  const renderRafRef = useRef(null);
+  const emitRafRef = useRef(null);
+  const pendingCameraRef = useRef(null);
 
   const render = () => {
     const renderer = rendererRef.current;
@@ -75,6 +78,23 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
     if (!renderer || !scene || !perspectiveCamera) return;
     applyCameraPose(perspectiveCamera, cameraStateRef.current);
     renderer.render(scene, perspectiveCamera);
+  };
+
+  const scheduleRender = () => {
+    if (renderRafRef.current) return;
+    renderRafRef.current = requestAnimationFrame(() => {
+      renderRafRef.current = null;
+      render();
+    });
+  };
+
+  const scheduleCameraChange = (next) => {
+    pendingCameraRef.current = next;
+    if (emitRafRef.current) return;
+    emitRafRef.current = requestAnimationFrame(() => {
+      emitRafRef.current = null;
+      if (pendingCameraRef.current) onCameraChange?.(pendingCameraRef.current);
+    });
   };
 
   useEffect(() => {
@@ -116,6 +136,8 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
     resizeObserver.observe(container);
 
     return () => {
+      if (renderRafRef.current) cancelAnimationFrame(renderRafRef.current);
+      if (emitRafRef.current) cancelAnimationFrame(emitRafRef.current);
       resizeObserver.disconnect();
       disposeObject(meshRef.current);
       meshRef.current = null;
@@ -151,7 +173,7 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
           return;
         }
         texture.colorSpace = THREE.SRGBColorSpace;
-        const geometry = new THREE.SphereGeometry(500, 64, 32);
+        const geometry = new THREE.SphereGeometry(500, 32, 16);
         geometry.scale(-1, 1, 1);
         const material = new THREE.MeshBasicMaterial({ map: texture });
         const mesh = new THREE.Mesh(geometry, material);
@@ -201,8 +223,8 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
   const emitCameraChange = (patch) => {
     const next = normalizeCamera({ ...cameraStateRef.current, ...patch });
     cameraStateRef.current = next;
-    onCameraChange?.(next);
-    render();
+    scheduleCameraChange(next);
+    scheduleRender();
   };
 
   const handlePointerDown = (event) => {
@@ -233,6 +255,7 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
   const handlePointerUp = (event) => {
     if (dragRef.current?.pointerId !== event.pointerId) return;
     event.stopPropagation();
+    onCameraChange?.(cameraStateRef.current);
     dragRef.current = null;
   };
 

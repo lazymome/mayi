@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && node scripts/copy-versioned-build.cjs",
+    "release:windows": "npm run build && node scripts/package-windows-portable.cjs",
     "preview": "vite preview",
     "test:k87": "node scripts/k87_feature_tests.cjs",
     "test:storyboard-parser": "node scripts/storyboard_project_parser_regression.cjs",
@@ -13,7 +14,7 @@
     "test:smoke-playwright": "node scripts/smoke_playwright_fallback.cjs",
     "test:mcp-gateway": "node scripts/mcp_gateway_smoke.cjs",
     "test:mcp-frontend": "node scripts/mcp_frontend_tools_smoke.cjs",
-    "test:release:gates": "npm run test:k87 && npm run test:storyboard-parser && npm run test:storyboard-roundtrip"
+    "test:release:gates": "npm run test:k87 && npm run test:storyboard-parser && npm run test:storyboard-roundtrip && npm run test:mcp-gateway && npm run test:mcp-frontend"
   },
   "dependencies": {
     "dompurify": "^3.0.8",

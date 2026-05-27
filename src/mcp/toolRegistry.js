@@ -50,6 +50,73 @@ export const TAPNOW_CORE_TOOLS = [
     },
   },
   {
+    name: "list_nodes",
+    title: "列出画布节点",
+    risk: TOOL_RISK.READ,
+    description: "列出当前画布节点的摘要信息，不返回完整大体积媒体内容。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: {
+          type: "number",
+          minimum: 1,
+          maximum: 200,
+          description: "返回节点数量，默认 50。",
+        },
+        type: { type: "string", description: "可选节点类型过滤。" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_canvas_summary",
+    title: "获取画布摘要",
+    risk: TOOL_RISK.READ,
+    description: "统计当前画布节点、连线、选择状态和视图信息。",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_selected_nodes",
+    title: "获取选中节点",
+    risk: TOOL_RISK.READ,
+    description: "返回当前选中节点的摘要信息。",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "find_nodes_by_type",
+    title: "按类型查找节点",
+    risk: TOOL_RISK.READ,
+    description: "按节点类型查找画布节点摘要。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: { type: "string", description: "节点类型，例如 text-node、input-image。" },
+        limit: { type: "number", minimum: 1, maximum: 200, description: "返回数量，默认 50。" },
+      },
+      required: ["type"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_project_status",
+    title: "获取项目状态",
+    risk: TOOL_RISK.READ,
+    description: "返回当前项目的节点、连线、历史、批量队列等状态摘要。",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "create_text_node",
     title: "创建文本节点",
     risk: TOOL_RISK.WRITE,

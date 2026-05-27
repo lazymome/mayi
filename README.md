@@ -20,6 +20,57 @@
 - **本地 Jimeng-API 7z 一键包**: 解压后运行，Base URL 指向 `http://localhost:5100`，API Key 使用 `sessionid`。
 - **国际化基础**: 引入 i18n 基础设施，逐步支持中英文切换与文案维护。
 
+## 🧭 当前架构约束与发布规范
+
+本项目优先服务个人与小型工作室，架构选择以“本地优先、低运维、可回滚、可审计”为原则。
+
+### MCP 与自动化边界
+
+- Chat 工具调用必须先经过 `src/mcp/toolRegistry.js` 注册，并声明风险级别。
+- 只读工具（如模型、历史、画布摘要、选中节点查询）可自动执行。
+- 写入、生成、外部调用、批量消耗资源的工具必须经 `src/mcp/toolPolicy.js` 二次确认。
+- 工具返回值必须摘要化，禁止把完整大体积图片、视频、密钥或本地绝对路径无约束回传给模型。
+- 本地 MCP 网关默认关闭；启用 `/mcp/call` 时建议配置 `TAPNOW_MCP_AUTH_TOKEN` 或 `mcp.auth_token`。
+
+### 性能预算
+
+- 画布交互路径禁止在高频事件或 RAF 中做大体积序列化，例如 `canvas.toDataURL()`、完整 history 深拷贝、大量同步 JSON stringify。
+- 图片/视频资源应优先走 Blob URL、本地缓存、懒加载或虚拟化，卸载时释放对象 URL。
+- Panorama / WebGL 组件必须显式清理 renderer、texture、geometry、RAF 与 observer。
+- 本地接收器对请求体、代理体积、HTTP 并发、Comfy 队列、任务 TTL 均应保持有界配置，避免长时间运行后资源无限增长。
+
+### Windows 10/11 发布流程
+
+当前发布只承诺 Windows 10/11 + Chrome/Edge 场景：
+
+```bash
+npm run test:release:gates
+npm run build
+npm run release:windows
+```
+
+产物规则：
+
+- `dist/tapnow-studio-v<version>.html`：单 HTML 构建产物。
+- `release/tapnow-studio-windows-portable-v<version>.zip`：Windows 便携包。
+- `release/*.sha256`：便携包校验和。
+- `release/*.manifest.json`：版本、文件名、sha256 与生成时间。
+
+发布前检查清单：
+
+- `npm run test:release:gates` 通过。
+- `npm run build` 通过并生成 versioned HTML。
+- `npm run release:windows` 通过并生成 zip、sha256、manifest。
+- 手动在 Windows 10/11 的 Chrome 或 Edge 打开 HTML，确认设置面板、画布、Chat、历史、生成入口可用。
+- 如启用本地接收器，确认 `python localserver/tapnow-server-full.py` 后 `/ping`、`/status`、`/mcp/status` 正常。
+
+### 后续开发一致性
+
+- 新增模型协议优先落在模型库/Provider 配置层，不在业务流程中硬编码供应商分支。
+- 新增 MCP 工具必须同步补充风险级别、参数上限、测试或 smoke 覆盖。
+- 新增本地服务能力必须有路径白名单、大小上限、超时、审计或错误返回策略。
+- 任何影响发布产物结构的脚本变更，必须同时更新 Windows 发布说明与 release gate。
+
 ---
 
 ## 📅 版本历史与选择
@@ -255,12 +306,11 @@ Docker 细节文档已独立维护在 [**localserver/Docker_README.md**](./local
 
 你可以选择以下任意一种方式在本地运行服务：
 
-**选项 A：下载可执行文件 (.exe)** 前往 [jimeng-api Releases](https://github.com/iptag/jimeng-api/releases) 下载 Windows/Mac/Linux 版本并运行。
+**选项 A：下载可执行文件 (.exe)** 前往 [jimeng-api Releases](https://github.com/iptag/jimeng-api/releases) 下载 Windows 版本并运行。
 
 **选项 B：下载已配置好的压缩包 (.7z)**
 
 - Windows：`JimengAPI_Release_Green_260211_v1.9.1.7z`
-- macOS：`JimengAPI_For_Mac_Users_260211_v1.9.1.7z`
 
 服务启动后，默认地址为 `http://localhost:5100`
 

@@ -24,8 +24,8 @@
 #### 2026-02-11 文档维护（3.8.7-rc7）
 - **[文档]** `README.md` 新增“画布简要使用说明”，补齐节点连线、预览与画布基础交互步骤。
 - **[文档]** `README.md` 的 Docker 章节改为“简要使用方式 + 文档链接”，避免与 `localserver/Docker_README.md` 重复维护。
-- **[资源]** 即梦本地一键包更新为 `JimengAPI_Release_Green_260211_v1.9.1.7z`（Win）与 `JimengAPI_For_Mac_Users_260211_v1.9.1.7z`（Mac）。
-- **[资源]** 下线旧包 `JimengAPI_Release_Green_260207_v1.8.8.7z` 与 `JimengAPI_For_Mac_Users_260207_v1.8.8.7z`。
+- **[资源]** 即梦本地一键包更新为 `JimengAPI_Release_Green_260211_v1.9.1.7z`（Win）。
+- **[资源]** 下线旧包 `JimengAPI_Release_Green_260207_v1.8.8.7z`。
 - **[工程]** 构建复制工具迁移：`tools/copy-versioned-build.cjs` 移入 `scripts/copy-versioned-build.cjs`，并更新 `package.json` 构建引用。
 - **[工程]** 新增 `scripts/SCRIPTS_MAP.md`（脚本地图）与 `scripts/backup_scripts.ps1`（脚本备份 zip + manifest 机制）。
 

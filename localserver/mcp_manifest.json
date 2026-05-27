@@ -10,7 +10,8 @@
       "default_enabled": true,
       "input_schema": {
         "type": "object",
-        "properties": {}
+        "properties": {},
+        "additionalProperties": false
       }
     },
     {
@@ -23,7 +24,8 @@
         "properties": {
           "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 },
           "offset": { "type": "integer", "minimum": 0, "default": 0 }
-        }
+        },
+        "additionalProperties": false
       }
     },
     {
@@ -33,7 +35,8 @@
       "default_enabled": true,
       "input_schema": {
         "type": "object",
-        "properties": {}
+        "properties": {},
+        "additionalProperties": false
       }
     },
     {
@@ -43,7 +46,8 @@
       "default_enabled": true,
       "input_schema": {
         "type": "object",
-        "properties": {}
+        "properties": {},
+        "additionalProperties": false
       }
     },
     {
@@ -57,7 +61,8 @@
           "job_id": { "type": "string" },
           "request_id": { "type": "string" },
           "task_id": { "type": "string" }
-        }
+        },
+        "additionalProperties": false
       }
     },
     {
@@ -75,7 +80,8 @@
           "ext": { "type": "string", "default": ".jpg" },
           "type": { "type": "string", "enum": ["image", "video"], "default": "image" },
           "custom_path": { "type": "string" }
-        }
+        },
+        "additionalProperties": false
       }
     }
   ]

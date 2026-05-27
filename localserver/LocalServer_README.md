@@ -37,7 +37,6 @@ python tapnow-server-full.py
 若使用仓库内置即梦一键包，请使用当前版本：
 
 - `JimengAPI_Release_Green_260211_v1.9.1.7z`（Windows）
-- `JimengAPI_For_Mac_Users_260211_v1.9.1.7z`（macOS）
 
 ### Docker 启动
 
@@ -55,8 +54,39 @@ python tapnow-server-full.py
 - **save_path**：资源保存目录（必须落在 allowed_roots 内）。
 - **proxy_allowed_hosts**：代理白名单（决定哪些域名允许走 `/proxy`）。
 - **proxy_timeout**：代理超时（秒）。
+- **max_json_body_bytes**：普通 JSON 请求体上限，默认 `10485760`（10 MB）。
+- **max_proxy_body_bytes**：`/proxy` 请求体上限，默认 `52428800`（50 MB）。
+- **max_http_workers**：HTTP 并发请求上限，默认 `32`。
+- **max_comfy_queue_size**：ComfyUI 等待队列上限，默认 `32`。
+- **comfy_task_timeout**：单个 ComfyUI 任务等待输出的超时秒数，默认 `600`。
+- **job_ttl_seconds** / **max_job_status_items**：任务状态保留 TTL 与最大条目数，用于限制长期运行内存占用。
 
 修改配置后需重启本地接收器生效。
+
+### 资源边界建议
+
+个人电脑或小型工作室机器建议先使用默认值。若机器内存较小或多人共用同一台本地接收器，可降低 `max_http_workers` 与 `max_comfy_queue_size`；若经常上传大图/视频，可只在可信内网环境下适当提高 `max_proxy_body_bytes`。
+
+示例：
+
+```json
+{
+  "max_json_body_bytes": 10485760,
+  "max_proxy_body_bytes": 52428800,
+  "max_http_workers": 16,
+  "max_comfy_queue_size": 8,
+  "comfy_task_timeout": 600,
+  "job_ttl_seconds": 86400,
+  "max_job_status_items": 500
+}
+```
+
+约束原则：
+
+- 不建议将请求体上限设为无限大。
+- 不建议将 `max_http_workers` 设得高于本机可承受的并发 I/O 能力。
+- ComfyUI 通常是 GPU/显存瓶颈，队列上限应小于真实可承受排队数量。
+- 长时间运行时依赖 TTL 清理历史任务状态，避免内存无限增长。
 
 ---
 
@@ -238,10 +268,12 @@ await fetch(url, {
 说明：
 
 - `enabled` 默认为 `false`，需要对外部客户端开放时再改为 `true`。
+- 如果 `enabled=true` 但没有配置 token，`/mcp/status` 会返回安全警告；仅建议在完全本机使用时这样配置。
 - `auth_token` 非空时，`/mcp/call` 必须携带 `Authorization: Bearer <token>` 或 `X-Tapnow-MCP-Token`。
 - 也可用环境变量 `TAPNOW_MCP_AUTH_TOKEN` 设置 token，优先级高于配置文件。
 - `allowed_tools` 为空时，仅开放 manifest 中默认启用的只读/低风险工具；写入工具如 `save_cache` 需显式加入 allowlist。
-- 审计日志默认写入 `localserver/.tapnow_mcp_audit.log`，只记录时间、工具名与成功/错误，不记录大体积内容。
+- 审计日志默认写入 `localserver/.tapnow_mcp_audit.log`，只记录时间、工具名、参数键与参数 hash，不记录大体积内容。
+- `save_cache` 会校验文件类型、大小上限与保存路径；默认最大缓存写入体积为 25 MB，可通过 `mcp.max_save_cache_bytes` 调整。
 
 ### 4.2 可用工具
 
@@ -257,7 +289,15 @@ await fetch(url, {
 
 - `save_cache`：复用本地缓存保存规则，默认不启用，需配置 `"allowed_tools": ["save_cache"]` 或 `"*"`。
 
-### 4.3 curl 示例
+### 4.3 MCP 调用确认边界
+
+本地网关本身只负责鉴权、参数校验、工具 allowlist 与审计。真正面向用户的二次确认由前端 Chat 工具策略负责：
+
+- 只读工具可自动运行。
+- 写入、生成、外部调用、批量资源消耗类工具必须先向用户展示风险、参数摘要与影响范围。
+- 外部 MCP 客户端直接调用 `/mcp/call` 时，也应在客户端侧实现等价确认流程，不能假设本地服务会弹出确认框。
+
+### 4.4 curl 示例
 
 ```bash
 curl http://127.0.0.1:9527/mcp/status

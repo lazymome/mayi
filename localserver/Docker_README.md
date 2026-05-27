@@ -71,6 +71,58 @@ services:
 docker compose up -d --build
 ```
 
+## 资源边界配置
+
+容器环境同样会读取 `tapnow-local-config.json` 中的资源边界字段。小型工作室部署时建议显式设置，避免多人同时上传或排队任务导致容器资源被打满：
+
+```json
+{
+  "max_json_body_bytes": 10485760,
+  "max_proxy_body_bytes": 52428800,
+  "max_http_workers": 16,
+  "max_comfy_queue_size": 8,
+  "comfy_task_timeout": 600,
+  "job_ttl_seconds": 86400,
+  "max_job_status_items": 500
+}
+```
+
+建议：
+
+- 单机/单 GPU 环境优先降低 `max_comfy_queue_size`，避免任务排队过长。
+- 只在可信内网中提高 `max_proxy_body_bytes`。
+- 若容器 CPU/内存较小，将 `max_http_workers` 调整到 8-16。
+
+## MCP 网关安全
+
+Docker 暴露 `9527` 后，`/mcp/status` 与 `/mcp/tools` 可被同网络客户端访问；`/mcp/call` 是否可执行取决于配置中的 token 与 allowlist。
+
+建议配置：
+
+```json
+{
+  "mcp": {
+    "enabled": true,
+    "auth_token": "replace-with-local-token",
+    "allowed_origins": ["http://127.0.0.1", "http://localhost"],
+    "allowed_tools": []
+  }
+}
+```
+
+- 不需要外部 MCP 客户端时保持 `enabled: false`。
+- 需要写入工具（如 `save_cache`）时再显式加入 `allowed_tools`。
+- 不建议在 Docker / 局域网部署中无 token 开启 MCP 写入能力。
+
+## Windows 便携发布关系
+
+Docker 部署与 Windows 便携包是两条独立路径：
+
+- Docker：面向本机或小团队固定服务，使用 `docker compose up -d --build`。
+- Windows 便携包：面向 Windows 10/11 用户解压即用，使用 `npm run release:windows` 生成 zip、sha256、manifest。
+
+发布流程与验收清单见仓库根目录 README 的“Windows 10/11 发布流程”。
+
 ## 常见问题
 1. 健康检查失败  
 原因：服务未启动完成或端口占用。  

@@ -100,6 +100,13 @@ MEDIA_FILE_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.avif',
     '.mp4', '.mov', '.webm', '.avi', '.mkv', '.m4v'
 }
+DEFAULT_MAX_JSON_BODY_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_PROXY_BODY_BYTES = 50 * 1024 * 1024
+DEFAULT_MAX_HTTP_WORKERS = 32
+DEFAULT_MAX_COMFY_QUEUE_SIZE = 32
+DEFAULT_JOB_TTL_SECONDS = 24 * 60 * 60
+DEFAULT_MAX_JOB_STATUS_ITEMS = 500
+DEFAULT_COMFY_TASK_TIMEOUT = 600
 
 # ComfyUI 特有配置
 COMFY_URL = "http://127.0.0.1:8188"
@@ -116,6 +123,13 @@ config = {
     "allowed_roots": DEFAULT_ALLOWED_ROOTS,
     "proxy_allowed_hosts": DEFAULT_PROXY_ALLOWED_HOSTS,
     "proxy_timeout": DEFAULT_PROXY_TIMEOUT,
+    "max_json_body_bytes": DEFAULT_MAX_JSON_BODY_BYTES,
+    "max_proxy_body_bytes": DEFAULT_MAX_PROXY_BODY_BYTES,
+    "max_http_workers": DEFAULT_MAX_HTTP_WORKERS,
+    "max_comfy_queue_size": DEFAULT_MAX_COMFY_QUEUE_SIZE,
+    "job_ttl_seconds": DEFAULT_JOB_TTL_SECONDS,
+    "max_job_status_items": DEFAULT_MAX_JOB_STATUS_ITEMS,
+    "comfy_task_timeout": DEFAULT_COMFY_TASK_TIMEOUT,
     "auto_create_dir": True,
     "allow_overwrite": False,
     "log_enabled": True,
@@ -174,6 +188,20 @@ def load_config_file():
         if data.get("allowed_roots"): config["allowed_roots"] = data["allowed_roots"]
         if data.get("proxy_allowed_hosts"): config["proxy_allowed_hosts"] = data["proxy_allowed_hosts"]
         if data.get("proxy_timeout"): config["proxy_timeout"] = int(data["proxy_timeout"])
+        for key in (
+            "max_json_body_bytes",
+            "max_proxy_body_bytes",
+            "max_http_workers",
+            "max_comfy_queue_size",
+            "job_ttl_seconds",
+            "max_job_status_items",
+            "comfy_task_timeout",
+        ):
+            if key in data:
+                try:
+                    config[key] = max(0, int(data[key]))
+                except Exception:
+                    pass
         if "mcp" in data and isinstance(data["mcp"], dict):
             config["mcp"].update(data["mcp"])
 
@@ -243,6 +271,68 @@ def get_unique_filename(filepath):
     while os.path.exists(f"{base}_{counter}{ext}"):
         counter += 1
     return f"{base}_{counter}{ext}"
+
+def bounded_int(value, default, minimum=0, maximum=None):
+    try:
+        result = int(value)
+    except Exception:
+        result = default
+    result = max(minimum, result)
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
+
+def cleanup_job_state(now=None):
+    """Bound in-memory Comfy status/WS maps so long sessions do not grow forever."""
+    now = now or time.time()
+    ttl = bounded_int(config.get("job_ttl_seconds"), DEFAULT_JOB_TTL_SECONDS, 60)
+    max_items = bounded_int(config.get("max_job_status_items"), DEFAULT_MAX_JOB_STATUS_ITEMS, 10)
+    with STATUS_LOCK:
+        expired_ids = []
+        for job_id, job in list(JOB_STATUS.items()):
+            finished_at = job.get('finished_at') or job.get('created_at') or now
+            is_terminal = job.get('status') in ('success', 'failed', 'canceled')
+            if is_terminal and now - finished_at > ttl:
+                expired_ids.append(job_id)
+        if len(JOB_STATUS) - len(expired_ids) > max_items:
+            ordered = sorted(
+                JOB_STATUS.items(),
+                key=lambda item: item[1].get('finished_at') or item[1].get('created_at') or 0,
+            )
+            overflow = len(JOB_STATUS) - len(expired_ids) - max_items
+            expired_ids.extend(job_id for job_id, _ in ordered[:max(0, overflow)])
+        for job_id in set(expired_ids):
+            job = JOB_STATUS.pop(job_id, None)
+            if not job:
+                continue
+            prompt_id = job.get('prompt_id')
+            if prompt_id:
+                PROMPT_TO_JOB.pop(prompt_id, None)
+                WS_MESSAGES.pop(prompt_id, None)
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a configurable request concurrency cap."""
+
+    daemon_threads = True
+
+    def __init__(self, server_address, RequestHandlerClass, max_workers=DEFAULT_MAX_HTTP_WORKERS):
+        super().__init__(server_address, RequestHandlerClass)
+        self._request_semaphore = threading.BoundedSemaphore(max(1, int(max_workers)))
+
+    def process_request(self, request, client_address):
+        if not self._request_semaphore.acquire(blocking=False):
+            try:
+                request.close()
+            except Exception:
+                pass
+            return
+        return super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_semaphore.release()
 
 # --- 代理相关工具 ---
 PROXY_SKIP_REQUEST_HEADERS = {
@@ -636,18 +726,19 @@ class ComfyMiddleware:
                     pid = msg.get('data', {}).get('prompt_id')
                     if not pid:
                         return
-                    if pid not in WS_MESSAGES:
-                        WS_MESSAGES[pid] = []
-                    WS_MESSAGES[pid].append(msg)
+                    with STATUS_LOCK:
+                        if pid not in WS_MESSAGES:
+                            WS_MESSAGES[pid] = []
+                        WS_MESSAGES[pid].append(msg)
                 elif mtype == 'progress':
                     data = msg.get('data', {})
                     pid = data.get('prompt_id')
                     if not pid:
                         return
-                    job_id = PROMPT_TO_JOB.get(pid)
-                    if not job_id:
-                        return
                     with STATUS_LOCK:
+                        job_id = PROMPT_TO_JOB.get(pid)
+                        if not job_id:
+                            return
                         if job_id in JOB_STATUS:
                             JOB_STATUS[job_id]['progress'] = {
                                 'value': data.get('value', 0),
@@ -656,12 +747,11 @@ class ComfyMiddleware:
                 elif mtype == 'execution_error':
                     data = msg.get('data', {})
                     pid = data.get('prompt_id')
-                    job_id = PROMPT_TO_JOB.get(pid) if pid else None
-                    if job_id:
-                        with STATUS_LOCK:
-                            if job_id in JOB_STATUS and JOB_STATUS[job_id].get('status') not in ('success', 'failed'):
-                                JOB_STATUS[job_id]['status'] = 'failed'
-                                JOB_STATUS[job_id]['error'] = data.get('exception_message') or 'execution_error'
+                    with STATUS_LOCK:
+                        job_id = PROMPT_TO_JOB.get(pid) if pid else None
+                        if job_id and job_id in JOB_STATUS and JOB_STATUS[job_id].get('status') not in ('success', 'failed'):
+                            JOB_STATUS[job_id]['status'] = 'failed'
+                            JOB_STATUS[job_id]['error'] = data.get('exception_message') or 'execution_error'
             except: pass
 
         def ws_thread_func():
@@ -679,6 +769,7 @@ class ComfyMiddleware:
         # 2. 任务处理循环
         while True:
             job = JOB_QUEUE.get() # 阻塞获取任务
+            cleanup_job_state()
             job_id = job['id']
             prompt_id = None
             
@@ -703,7 +794,7 @@ class ComfyMiddleware:
                 log(f"[Comfy] 已提交到后端, PromptID: {prompt_id}")
                 with STATUS_LOCK:
                     JOB_STATUS[job_id]['prompt_id'] = prompt_id
-                PROMPT_TO_JOB[prompt_id] = job_id
+                    PROMPT_TO_JOB[prompt_id] = job_id
                 expected_count = 1
                 try:
                     expected_count = max(1, int(ComfyMiddleware.extract_batch_size(wf)))
@@ -711,21 +802,25 @@ class ComfyMiddleware:
                     expected_count = 1
                 
                 # 等待结果 (简化版 Event Loop)
-                timeout = 600
+                timeout = bounded_int(config.get("comfy_task_timeout"), DEFAULT_COMFY_TASK_TIMEOUT, 30)
                 start_t = time.time()
                 final_images = []
+                seen_urls = set()
                 
                 last_count = 0
                 stable_ticks = 0
                 while time.time() - start_t < timeout:
-                    if prompt_id in WS_MESSAGES:
-                        msgs = WS_MESSAGES[prompt_id]
+                    with STATUS_LOCK:
+                        msgs = list(WS_MESSAGES.get(prompt_id, []))
+                    if msgs:
                         for m in msgs:
                             # 提取 output 图片
                             outputs = m['data'].get('output', {}).get('images', [])
                             for img in outputs:
                                 url = f"{COMFY_URL}/view?filename={img['filename']}&type={img['type']}&subfolder={img['subfolder']}"
-                                final_images.append(url)
+                                if url not in seen_urls:
+                                    seen_urls.add(url)
+                                    final_images.append(url)
                         if len(final_images) >= expected_count:
                             break
                         if len(final_images) == last_count and final_images:
@@ -754,10 +849,11 @@ class ComfyMiddleware:
                     JOB_STATUS[job_id]['error'] = str(e)
                     JOB_STATUS[job_id]['finished_at'] = time.time()
             finally:
-                if prompt_id in WS_MESSAGES:
-                    WS_MESSAGES.pop(prompt_id, None)
-                if prompt_id in PROMPT_TO_JOB:
-                    PROMPT_TO_JOB.pop(prompt_id, None)
+                with STATUS_LOCK:
+                    if prompt_id in WS_MESSAGES:
+                        WS_MESSAGES.pop(prompt_id, None)
+                    if prompt_id in PROMPT_TO_JOB:
+                        PROMPT_TO_JOB.pop(prompt_id, None)
                 JOB_QUEUE.task_done()
 
 def format_timestamp(ts):
@@ -862,6 +958,14 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
     def _read_json_body(self):
         try:
             length = int(self.headers.get('Content-Length', 0))
+            max_length = bounded_int(
+                config.get("max_json_body_bytes"),
+                DEFAULT_MAX_JSON_BODY_BYTES,
+                1024,
+            )
+            if length > max_length:
+                self._send_json({"error": "Request body too large", "max_bytes": max_length}, 413)
+                return None
             if length == 0: return {}
             return json.loads(self.rfile.read(length).decode('utf-8'))
         except:
@@ -1132,6 +1236,20 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
                 "status": "queued",
                 "created_at": time.time()
             }
+
+            cleanup_job_state()
+            max_queue_size = bounded_int(
+                config.get("max_comfy_queue_size"),
+                DEFAULT_MAX_COMFY_QUEUE_SIZE,
+                1,
+            )
+            if JOB_QUEUE.qsize() >= max_queue_size:
+                self._send_json({
+                    "code": 429,
+                    "message": "Comfy queue is full",
+                    "max_queue_size": max_queue_size,
+                }, 429)
+                return
 
             with STATUS_LOCK:
                 JOB_STATUS[job_id] = job
@@ -1589,6 +1707,14 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
 
         method = self.command
         content_length = int(self.headers.get('Content-Length', 0))
+        max_proxy_body = bounded_int(
+            config.get("max_proxy_body_bytes"),
+            DEFAULT_MAX_PROXY_BODY_BYTES,
+            1024,
+        )
+        if content_length > max_proxy_body:
+            self._send_json({"success": False, "error": "代理请求体过大", "max_bytes": max_proxy_body}, 413)
+            return
         body = self.rfile.read(content_length) if content_length > 0 else None
 
         forward_headers = {}
@@ -1690,7 +1816,11 @@ def main():
         log("ComfyUI 中间件模块已禁用 (缺少 websocket-client 或手动关闭)")
 
     # 4. 启动 HTTP 服务
-    server = ThreadingHTTPServer(('0.0.0.0', args.port), TapnowFullHandler)
+    server = BoundedThreadingHTTPServer(
+        ('0.0.0.0', args.port),
+        TapnowFullHandler,
+        max_workers=bounded_int(config.get("max_http_workers"), DEFAULT_MAX_HTTP_WORKERS, 1),
+    )
     
     print("=" * 60)
     print(f"  Tapnow Local Server v2.3 running on http://127.0.0.1:{args.port}")
