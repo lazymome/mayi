@@ -141,6 +141,14 @@ import {
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 import i18n from "./i18n";
+import {
+  extractTapnowToolCalls,
+  formatToolResultForChat,
+  getTapnowToolSchemas,
+} from "./mcp/toolRegistry";
+import { createTapnowActionResult } from "./mcp/appActions";
+import { createTapnowToolExecutor } from "./mcp/toolExecutor";
+import PanoramaViewer from "./components/panorama/PanoramaViewer";
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
 const t = i18n.t.bind(i18n);
@@ -474,6 +482,153 @@ const dataUrlToBlob = (dataUrl) => {
     bytes[i] = binary.charCodeAt(i);
   }
   return new Blob([bytes], { type: mime });
+};
+
+const PANORAMA_ASPECT_OPTIONS = ["16:9", "9:16", "1:1", "2.35:1"];
+const PANORAMA_FOCAL_PRESETS = [14, 24, 35, 50, 85];
+
+const getDefaultPanoramaCamera = () => ({
+  yaw: 0,
+  pitch: 0,
+  fov: 65,
+  focalLength: 28,
+  aspectRatio: "16:9",
+  width: 1280,
+  height: 720,
+});
+
+const normalizePanoramaCamera = (camera = {}) => {
+  const defaults = getDefaultPanoramaCamera();
+  const next = { ...defaults, ...(camera || {}) };
+  next.yaw = Number.isFinite(Number(next.yaw)) ? Number(next.yaw) : defaults.yaw;
+  next.pitch = Number.isFinite(Number(next.pitch))
+    ? Math.max(-85, Math.min(85, Number(next.pitch)))
+    : defaults.pitch;
+  next.fov = Number.isFinite(Number(next.fov))
+    ? Math.max(20, Math.min(120, Number(next.fov)))
+    : defaults.fov;
+  next.focalLength = Number.isFinite(Number(next.focalLength))
+    ? Math.max(8, Math.min(200, Number(next.focalLength)))
+    : defaults.focalLength;
+  next.aspectRatio = PANORAMA_ASPECT_OPTIONS.includes(next.aspectRatio)
+    ? next.aspectRatio
+    : defaults.aspectRatio;
+  next.width = Number.isFinite(Number(next.width))
+    ? Math.max(320, Math.min(4096, Math.round(Number(next.width))))
+    : defaults.width;
+  next.height = Number.isFinite(Number(next.height))
+    ? Math.max(320, Math.min(4096, Math.round(Number(next.height))))
+    : defaults.height;
+  return next;
+};
+
+const getPanoramaAspectValue = (ratio = "16:9") => {
+  if (ratio === "2.35:1") return 2.35;
+  const [w, h] = String(ratio).split(":").map(Number);
+  return w && h ? w / h : 16 / 9;
+};
+
+const getPanoramaCameraSize = (camera = {}) => {
+  const normalized = normalizePanoramaCamera(camera);
+  const aspect = getPanoramaAspectValue(normalized.aspectRatio);
+  let width = normalized.width;
+  let height = Math.round(width / aspect);
+  if (height < 320) {
+    height = 320;
+    width = Math.round(height * aspect);
+  }
+  return { width, height };
+};
+
+const focalLengthToFov = (focalLength) => {
+  const focal = Number(focalLength) || 28;
+  return Math.round((2 * Math.atan(36 / (2 * focal)) * 180) / Math.PI);
+};
+
+const createPanoramaBackground = (url, name = "") => ({
+  id: `pano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  name: name || `全景背景 ${new Date().toLocaleTimeString()}`,
+  imageUrl: url,
+  projection: "equirectangular",
+  source: "uploaded",
+  createdAt: Date.now(),
+});
+
+const getShotPanoramaStage = (shot = {}) => ({
+  backgroundId: "",
+  backgroundUrl: "",
+  captureUrl: "",
+  captureUpdatedAt: null,
+  camera: getDefaultPanoramaCamera(),
+  redraw: { status: "idle", outputImages: [], outputUrl: "" },
+  ...(shot.stage || {}),
+  camera: normalizePanoramaCamera(shot.stage?.camera || shot.cameraParams),
+  redraw: {
+    status: "idle",
+    outputImages: [],
+    outputUrl: "",
+    ...(shot.stage?.redraw || {}),
+  },
+});
+
+const getPanoramaPreviewStyle = (imageUrl, camera = {}) => {
+  const normalized = normalizePanoramaCamera(camera);
+  const cropW = Math.max(12, Math.min(85, normalized.fov));
+  const cropH = Math.max(12, Math.min(85, normalized.fov * 0.56));
+  const x = (((normalized.yaw % 360) + 360) % 360) / 360;
+  const y = (90 - normalized.pitch) / 180;
+  return {
+    backgroundImage: imageUrl ? `url(${imageUrl})` : undefined,
+    backgroundSize: `${10000 / cropW}% ${10000 / cropH}%`,
+    backgroundPosition: `${Math.max(0, Math.min(100, x * 100))}% ${Math.max(
+      0,
+      Math.min(100, y * 100)
+    )}%`,
+  };
+};
+
+const renderEquirectangularFrame = async (imageUrl, camera = {}) => {
+  const normalized = normalizePanoramaCamera(camera);
+  const { width, height } = getPanoramaCameraSize(normalized);
+  const image = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("全景背景加载失败"));
+    img.src = imageUrl;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("无法创建截图画布");
+
+  const yawCenter = ((((normalized.yaw % 360) + 360) % 360) / 360) * image.width;
+  const pitchCenter = ((90 - normalized.pitch) / 180) * image.height;
+  const cropW = Math.max(1, (normalized.fov / 360) * image.width);
+  const cropH = Math.max(1, (normalized.fov / 180) * image.height);
+  const sx = yawCenter - cropW / 2;
+  const sy = Math.max(0, Math.min(image.height - cropH, pitchCenter - cropH / 2));
+
+  const drawPart = (sourceX, sourceW, destX, destW) => {
+    ctx.drawImage(image, sourceX, sy, sourceW, cropH, destX, 0, destW, height);
+  };
+
+  if (sx < 0) {
+    const leftW = -sx;
+    const rightW = cropW - leftW;
+    drawPart(image.width - leftW, leftW, 0, (leftW / cropW) * width);
+    drawPart(0, rightW, (leftW / cropW) * width, (rightW / cropW) * width);
+  } else if (sx + cropW > image.width) {
+    const rightW = image.width - sx;
+    const leftW = cropW - rightW;
+    drawPart(sx, rightW, 0, (rightW / cropW) * width);
+    drawPart(0, leftW, (rightW / cropW) * width, (leftW / cropW) * width);
+  } else {
+    drawPart(sx, cropW, 0, width);
+  }
+
+  return canvas.toDataURL("image/png");
 };
 
 const truncateByBytes = (value, maxBytes) => {
@@ -11640,6 +11795,7 @@ function TapnowApp() {
     });
     return map;
   }, [nodes]);
+  const panoramaViewerRefs = useRef(new Map());
 
   const modelLibraryMap = useMemo(() => {
     const map = new Map();
@@ -11995,6 +12151,8 @@ function TapnowApp() {
     },
     [getApiConfigByKey]
   );
+
+  const chatToolSchemas = useMemo(() => getTapnowToolSchemas(), []);
 
   const getHistoryMeta = useCallback(
     (item) => {
@@ -16633,7 +16791,44 @@ function TapnowApp() {
         request = { ...request, headers: requestHeaders };
       }
 
-      const transportResult = await executeTransportRequest({
+      const injectTapnowTools = (targetRequest) => {
+        if (!config?.capabilities?.supportsTools) return targetRequest;
+        const bodyType = String(
+          targetRequest?.bodyType || requestTemplate.bodyType || "json"
+        ).toLowerCase();
+        if (bodyType !== "json") return targetRequest;
+        let body = targetRequest?.body;
+        try {
+          if (typeof body === "string") body = JSON.parse(body);
+        } catch {
+          return targetRequest;
+        }
+        if (!body || typeof body !== "object" || Array.isArray(body))
+          return targetRequest;
+        return {
+          ...targetRequest,
+          body: {
+            ...body,
+            tools: body.tools || chatToolSchemas,
+            tool_choice: body.tool_choice || "auto",
+          },
+        };
+      };
+
+      const authorizeRequest = (targetRequest) => {
+        const headers =
+          targetRequest?.headers && typeof targetRequest.headers === "object"
+            ? { ...targetRequest.headers }
+            : {};
+        if (apiKey && !headers.Authorization && !headers.authorization) {
+          headers.Authorization = `Bearer ${apiKey}`;
+        }
+        return { ...targetRequest, headers };
+      };
+
+      request = injectTapnowTools(authorizeRequest(request));
+
+      let transportResult = await executeTransportRequest({
         request,
         baseUrl,
         providerKey: config?.provider,
@@ -16652,7 +16847,95 @@ function TapnowApp() {
         );
       }
 
-      const data = transportResult.data;
+      let data = transportResult.data;
+      const toolCalls = extractTapnowToolCalls(data);
+      if (toolCalls.length > 0) {
+        const toolResults = [];
+        for (const toolCall of toolCalls) {
+          try {
+            const result = await executeTapnowTool(
+              toolCall.name,
+              toolCall.arguments
+            );
+            toolResults.push({ toolCall, result });
+          } catch (error) {
+            toolResults.push({
+              toolCall,
+              result: createTapnowActionResult(false, {
+                error: error?.message || String(error),
+              }),
+            });
+          }
+        }
+        const assistantToolMessage = {
+          role: "assistant",
+          content: parseChatContent(data) || "",
+          tool_calls: toolCalls.map((toolCall) => ({
+            id: toolCall.id,
+            type: "function",
+            function: {
+              name: toolCall.name,
+              arguments: JSON.stringify(toolCall.arguments || {}),
+            },
+          })),
+        };
+        const toolMessages = toolResults.map(({ toolCall, result }) => ({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          name: toolCall.name,
+          content: formatToolResultForChat(result),
+        }));
+        const followupMessages = [
+          ...apiMessages,
+          assistantToolMessage,
+          ...toolMessages,
+        ];
+        const followupVars = {
+          ...requestVars,
+          messages: followupMessages,
+          chatMessages: followupMessages,
+          toolResults: toolResults.map(({ toolCall, result }) => ({
+            name: toolCall.name,
+            result,
+          })),
+        };
+        let followupRequest = buildRequestFromTemplate(
+          requestTemplate,
+          followupVars,
+          {
+            bodyType: requestTemplate.bodyType,
+          }
+        );
+        if (!followupRequest || !followupRequest.url) {
+          throw new Error("工具调用后的聊天请求模板构建失败");
+        }
+        followupRequest =
+          requestOverrideEnabled && requestOverridePatch
+            ? applyRequestOverridePatch(
+                { ...followupRequest },
+                requestOverridePatch
+              )
+            : followupRequest;
+        followupRequest = authorizeRequest(followupRequest);
+        transportResult = await executeTransportRequest({
+          request: followupRequest,
+          baseUrl,
+          providerKey: config?.provider,
+          transport: transportMode,
+          transportOptions,
+        });
+        if (!transportResult.ok) {
+          const errorText =
+            transportResult?.data?.message ||
+            transportResult?.data?.error?.message ||
+            transportResult?.errorMessage ||
+            transportResult?.text;
+          throw new Error(
+            errorText || `API Error: ${transportResult.status || 0}`
+          );
+        }
+        data = transportResult.data;
+      }
 
       let aiContent = parseChatContent(data);
       if (
@@ -27445,6 +27728,351 @@ function TapnowApp() {
     return newNode;
   };
 
+  const executeTapnowTool = useCallback(
+    async (toolName, rawArgs = {}) => {
+      const executor = createTapnowToolExecutor({
+        apiConfigs,
+        history,
+        resolveApiConfig,
+        resolveHistoryUrl,
+        addNode,
+        setChatFiles,
+        setIsChatOpen,
+        viewportWidth: typeof window !== "undefined" ? window.innerWidth : 0,
+        viewportHeight: typeof window !== "undefined" ? window.innerHeight : 0,
+        lastUsedImageModel,
+        lastUsedVideoModel,
+        resolveModelKey,
+        isImageModelType,
+        startGeneration,
+        nodesMap,
+        storyboardLlmSplitModes: STORYBOARD_LLM_SPLIT_MODES,
+        runStoryboardLlmSplit,
+        runStoryboardTablePromptMerge,
+        updateNodeSettings,
+        isSameShotId,
+        normalizeStoryboardMode,
+        generateSingleImage,
+        generateSingleShot,
+        updateShot,
+      });
+      return executor(toolName, rawArgs);
+
+      const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
+      if (toolName === "list_models") {
+        const type = normalizeToolString(args.type, "all");
+        const models = apiConfigs
+          .map((item) => resolveApiConfig(item))
+          .filter(Boolean)
+          .filter((item) => type === "all" || item.type === type)
+          .filter((item) => !item.disabled)
+          .slice(0, 80)
+          .map((item) => ({
+            key: item._uid || item.id,
+            id: item.id,
+            modelName: item.modelName,
+            displayName: item.displayName,
+            provider: item.provider,
+            type: item.type,
+            apiType: item.apiType,
+          }));
+        return createTapnowActionResult(true, { models, count: models.length });
+      }
+      if (toolName === "list_history") {
+        const limit = Math.max(
+          1,
+          Math.min(50, normalizeToolNumber(args.limit, 10))
+        );
+        const type = normalizeToolString(args.type, "all");
+        const items = history
+          .filter((item) => type === "all" || item.type === type)
+          .slice(0, limit)
+          .map((item) => ({
+            id: item.id,
+            type: item.type,
+            status: item.status,
+            prompt: item.prompt,
+            modelName: item.modelName,
+            provider: item.provider || item.apiConfig?.provider,
+            time: item.time,
+            url: resolveHistoryUrl(item),
+          }));
+        return createTapnowActionResult(true, { items, count: items.length });
+      }
+      if (toolName === "create_text_node") {
+        const text = normalizeToolString(args.text);
+        if (!text) throw new Error("text 不能为空");
+        const node = addNode(
+          "text-node",
+          normalizeToolNumber(args.x, window.innerWidth / 2),
+          normalizeToolNumber(args.y, window.innerHeight / 2),
+          null,
+          text
+        );
+        return createTapnowActionResult(true, {
+          nodeId: node?.id,
+          type: node?.type,
+        });
+      }
+      if (toolName === "create_image_node") {
+        const url = normalizeToolString(args.url);
+        if (!url) throw new Error("url 不能为空");
+        const node = addNode(
+          "input-image",
+          normalizeToolNumber(args.x, window.innerWidth / 2),
+          normalizeToolNumber(args.y, window.innerHeight / 2),
+          null,
+          url
+        );
+        return createTapnowActionResult(true, {
+          nodeId: node?.id,
+          type: node?.type,
+          url,
+        });
+      }
+      if (toolName === "send_asset_to_chat") {
+        const historyId = normalizeToolString(args.historyId);
+        const item = history.find((entry) => entry.id === historyId);
+        const resolvedUrl = resolveHistoryUrl(item);
+        if (!item || !resolvedUrl) throw new Error("未找到可发送的历史素材");
+        const isImage = item.type === "image";
+        const isVideo = item.type === "video";
+        const fileExt = isImage ? "png" : isVideo ? "mp4" : "file";
+        setChatFiles((prev) => [
+          ...prev,
+          {
+            name: `ToolAsset-${item.id}.${fileExt}`,
+            type: isImage
+              ? "image/png"
+              : isVideo
+              ? "video/mp4"
+              : "application/octet-stream",
+            content: resolvedUrl,
+            isImage,
+            isVideo,
+            isAudio: false,
+            fromHistory: true,
+            fileExt,
+          },
+        ]);
+        setIsChatOpen(true);
+        return createTapnowActionResult(true, {
+          attached: true,
+          historyId,
+          url: resolvedUrl,
+        });
+      }
+      if (
+        toolName === "start_image_generation" ||
+        toolName === "start_video_generation"
+      ) {
+        const prompt = normalizeToolString(args.prompt);
+        if (!prompt) throw new Error("prompt 不能为空");
+        const type = toolName === "start_video_generation" ? "video" : "image";
+        const fallbackModel =
+          type === "video"
+            ? resolveModelKey(lastUsedVideoModel) ||
+              resolveModelKey(
+                apiConfigs.find((item) => item.type === "Video")?.id
+              )
+            : resolveModelKey(lastUsedImageModel) ||
+              resolveModelKey(
+                apiConfigs.find((item) => isImageModelType(item.type))?.id
+              );
+        const model = resolveModelKey(args.model || fallbackModel);
+        const sourceImages = normalizeToolArray(args.referenceImages);
+        const taskId = `tool-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`;
+        startGeneration(prompt, type, sourceImages, taskId, {
+          model,
+          ratio: args.ratio,
+          resolution: args.resolution,
+          duration: args.duration,
+          _toolTriggered: true,
+        }).catch((error) =>
+          console.error("[MCP Tool] generation failed", error)
+        );
+        return createTapnowActionResult(true, {
+          accepted: true,
+          status: "submitted",
+          toolTriggered: true,
+          taskId,
+          type,
+          model,
+          prompt,
+        });
+      }
+      if (toolName === "run_storyboard_split") {
+        const nodeId = normalizeToolString(args.nodeId);
+        const mode = STORYBOARD_LLM_SPLIT_MODES.includes(args.mode)
+          ? args.mode
+          : "script";
+        const node = nodesMap.get(nodeId);
+        if (!node || node.type !== "storyboard-node") {
+          return createTapnowActionResult(false, {
+            error: "未找到分镜节点",
+            nodeId,
+          });
+        }
+        try {
+          runStoryboardLlmSplit(nodeId, mode).catch((error) => {
+            console.error("[MCP Tool] storyboard split failed", error);
+            updateNodeSettings(nodeId, {
+              isGenerating: false,
+              errorMsg: error?.message || "分镜拆分失败",
+            });
+          });
+          return createTapnowActionResult(true, {
+            accepted: true,
+            status: "submitted",
+            toolTriggered: true,
+            nodeId,
+            mode,
+          });
+        } catch (error) {
+          return createTapnowActionResult(false, {
+            error: error?.message || "分镜拆分提交失败",
+            nodeId,
+            mode,
+          });
+        }
+      }
+      if (toolName === "run_storyboard_table_prompt_merge") {
+        const nodeId = normalizeToolString(args.nodeId);
+        const node = nodesMap.get(nodeId);
+        if (!node || node.type !== "storyboard-node") {
+          return createTapnowActionResult(false, {
+            error: "未找到分镜节点",
+            nodeId,
+          });
+        }
+        try {
+          runStoryboardTablePromptMerge(nodeId).catch((error) => {
+            console.error(
+              "[MCP Tool] storyboard table prompt merge failed",
+              error
+            );
+            updateNodeSettings(nodeId, {
+              isGenerating: false,
+              errorMsg: error?.message || "表格提示词汇总失败",
+            });
+          });
+          return createTapnowActionResult(true, {
+            accepted: true,
+            status: "submitted",
+            toolTriggered: true,
+            nodeId,
+          });
+        } catch (error) {
+          return createTapnowActionResult(false, {
+            error: error?.message || "表格提示词汇总提交失败",
+            nodeId,
+          });
+        }
+      }
+      if (toolName === "generate_storyboard_shot") {
+        const nodeId = normalizeToolString(args.nodeId);
+        const shotId = normalizeToolString(args.shotId);
+        const requestedMode = ["image", "video", "auto"].includes(args.mode)
+          ? args.mode
+          : "auto";
+        const node = nodesMap.get(nodeId);
+        if (!node || node.type !== "storyboard-node") {
+          return createTapnowActionResult(false, {
+            error: "未找到分镜节点",
+            nodeId,
+          });
+        }
+        const shots = Array.isArray(node.settings?.shots)
+          ? node.settings.shots
+          : [];
+        const shot = shots.find((item) => isSameShotId(item.id, shotId));
+        if (!shot) {
+          return createTapnowActionResult(false, {
+            error: "未找到分镜镜头",
+            nodeId,
+            shotId,
+          });
+        }
+        const mode =
+          requestedMode === "auto"
+            ? normalizeStoryboardMode(node.settings?.mode)
+            : requestedMode;
+        const prompt = String(shot.prompt || shot.description || "").trim();
+        try {
+          if (mode === "image") {
+            generateSingleImage(nodeId, shot);
+          } else {
+            generateSingleShot(nodeId, shot);
+          }
+          return createTapnowActionResult(true, {
+            accepted: true,
+            status: "submitted",
+            toolTriggered: true,
+            nodeId,
+            shotId,
+            mode,
+            prompt,
+          });
+        } catch (error) {
+          updateShot(nodeId, shotId, {
+            status: "failed",
+            errorMsg: error?.message || "分镜镜头生成失败",
+          });
+          return createTapnowActionResult(false, {
+            error: error?.message || "分镜镜头生成提交失败",
+            nodeId,
+            shotId,
+            mode,
+            prompt,
+          });
+        }
+      }
+      if (toolName === "get_task_status") {
+        const taskId = normalizeToolString(args.taskId);
+        const item = history.find(
+          (entry) => entry.id === taskId || entry.remoteTaskId === taskId
+        );
+        if (!item)
+          return createTapnowActionResult(false, {
+            error: "未找到任务",
+            taskId,
+          });
+        return createTapnowActionResult(true, {
+          id: item.id,
+          remoteTaskId: item.remoteTaskId,
+          status: item.status,
+          progress: item.progress,
+          type: item.type,
+          url: resolveHistoryUrl(item),
+          errorMsg: item.errorMsg,
+        });
+      }
+      throw new Error(`未知工具: ${toolName}`);
+    },
+    [
+      addNode,
+      apiConfigs,
+      generateSingleImage,
+      generateSingleShot,
+      history,
+      isSameShotId,
+      nodesMap,
+      lastUsedImageModel,
+      lastUsedVideoModel,
+      normalizeStoryboardMode,
+      resolveApiConfig,
+      resolveHistoryUrl,
+      resolveModelKey,
+      runStoryboardLlmSplit,
+      runStoryboardTablePromptMerge,
+      startGeneration,
+      updateNodeSettings,
+      updateShot,
+    ]
+  );
+
   // V2.6.1: 角色/场景提示词生成与自动流程
   const normalizeCharacterAge = (ageValue) => {
     if (!ageValue) return "";
@@ -29229,6 +29857,27 @@ function TapnowApp() {
         "output_url",
         "video_url",
       ].some((key) => Object.prototype.hasOwnProperty.call(finalUpdates, key));
+      if (
+        hasOutputPayload &&
+        currentShot?.stage?.redraw?.status === "generating" &&
+        (finalUpdates.output_url || finalUpdates.output_images)
+      ) {
+        const redrawImages = Array.isArray(finalUpdates.output_images)
+          ? finalUpdates.output_images
+          : finalUpdates.output_url
+          ? [finalUpdates.output_url]
+          : [];
+        finalUpdates.stage = {
+          ...(currentShot.stage || {}),
+          redraw: {
+            ...(currentShot.stage?.redraw || {}),
+            status: "done",
+            outputUrl: finalUpdates.output_url || redrawImages[0] || "",
+            outputImages: redrawImages,
+            updatedAt: Date.now(),
+          },
+        };
+      }
       if (hasOutputPayload && !skipOutputHistory) {
         const beforeSnapshot = normalizeStoryboardOutputSnapshot(currentShot);
         const afterSnapshot = normalizeStoryboardOutputSnapshot({
@@ -29998,6 +30647,121 @@ function TapnowApp() {
         { onlyIfStatus: "generating" }
       );
     }, timeoutMs);
+  };
+
+  const updateShotPanoramaStage = (nodeId, shot, stagePatch = {}) => {
+    const currentStage = getShotPanoramaStage(shot);
+    updateShot(nodeId, shot.id, {
+      stage: {
+        ...currentStage,
+        ...stagePatch,
+        camera: normalizePanoramaCamera(stagePatch.camera || currentStage.camera),
+        redraw: {
+          ...(currentStage.redraw || {}),
+          ...(stagePatch.redraw || {}),
+        },
+      },
+    });
+  };
+
+  const addPanoramaBackgroundToStoryboard = (nodeId, shot, file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const rawUrl = ev.target.result;
+      const storedUrl = (await LocalImageManager.saveImage(rawUrl)) || rawUrl;
+      const background = createPanoramaBackground(storedUrl, file.name);
+      const node = nodesMap.get(nodeId);
+      const backgrounds = Array.isArray(node?.settings?.panoramaBackgrounds)
+        ? node.settings.panoramaBackgrounds
+        : [];
+      updateNodeSettings(nodeId, {
+        panoramaBackgrounds: [...backgrounds, background],
+      });
+      updateShotPanoramaStage(nodeId, shot, {
+        backgroundId: background.id,
+        backgroundUrl: background.imageUrl,
+      });
+      showToast("已添加全景背景", "success", 1800);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const capturePanoramaShotFrame = async (nodeId, shot, options = {}) => {
+    const stage = getShotPanoramaStage(shot);
+    const backgroundUrl = stage.backgroundUrl;
+    if (!backgroundUrl) {
+      alert("请先选择或上传全景背景");
+      return "";
+    }
+    try {
+      const resolvedUrl = await resolveSpecialUrl(backgroundUrl);
+      const viewerKey = `${nodeId}:${shot.id}`;
+      const viewer = panoramaViewerRefs.current.get(viewerKey);
+      const camera = normalizePanoramaCamera(stage.camera);
+      const { width, height } = getPanoramaCameraSize(camera);
+      let dataUrl = "";
+
+      try {
+        dataUrl = await viewer?.capture?.({ width, height, camera });
+      } catch (captureError) {
+        console.warn(
+          "[Panorama] Three.js capture failed, falling back to canvas crop",
+          captureError
+        );
+      }
+
+      if (!dataUrl) {
+        dataUrl = await renderEquirectangularFrame(resolvedUrl, camera);
+      }
+      const storedUrl = (await LocalImageManager.saveImage(dataUrl)) || dataUrl;
+      updateShotPanoramaStage(nodeId, shot, {
+        captureUrl: storedUrl,
+        captureUpdatedAt: Date.now(),
+        ...(options.applyToInput ? { backgroundUrl: stage.backgroundUrl } : {}),
+      });
+      if (options.applyToInput) {
+        updateShot(nodeId, shot.id, { image_url: storedUrl });
+      }
+      showToast("已截图当前镜头", "success", 1800);
+      return storedUrl;
+    } catch (error) {
+      alert(`全景截图失败: ${error?.message || error}`);
+      return "";
+    }
+  };
+
+  const redrawPanoramaShotFrame = async (nodeId, shot) => {
+    const stage = getShotPanoramaStage(shot);
+    const captureUrl =
+      stage.captureUrl ||
+      (await capturePanoramaShotFrame(nodeId, shot, { applyToInput: false }));
+    if (!captureUrl) return;
+    const camera = normalizePanoramaCamera(stage.camera);
+    const promptBase = shot.prompt || shot.description || "全景镜头画面";
+    const redrawPrompt = [
+      "Enhance and redraw this frame in ultra high definition.",
+      "Preserve the exact composition, camera angle, perspective, layout, and major shapes.",
+      "Do not change the scene structure. Improve texture details, lighting quality, material realism, and clarity.",
+      `Camera: yaw ${camera.yaw} degrees, pitch ${camera.pitch} degrees, FOV ${camera.fov} degrees, aspect ${camera.aspectRatio}.`,
+      `Original shot description: ${promptBase}`,
+    ].join("\n");
+    updateShotPanoramaStage(nodeId, shot, {
+      redraw: {
+        ...(stage.redraw || {}),
+        status: "generating",
+        sourceCaptureUrl: captureUrl,
+        prompt: redrawPrompt,
+      },
+    });
+    generateSingleImage(nodeId, {
+      ...shot,
+      prompt: redrawPrompt,
+      image_url: captureUrl,
+      referenceImages: [captureUrl],
+      ratio: camera.aspectRatio,
+      resolution: shot.resolution || "4K",
+    });
   };
 
   const generateSingleShot = (nodeId, shot) => {
@@ -43749,6 +44513,328 @@ ${inputText.substring(0, 15000)} ... (截断)
                                             }
                                           >
                                             {customParamsView}
+                                          </div>
+                                        );
+                                      })()}
+
+                                      {(() => {
+                                        const stage = getShotPanoramaStage(shot);
+                                        const camera = normalizePanoramaCamera(
+                                          stage.camera
+                                        );
+                                        const backgrounds = Array.isArray(
+                                          node.settings?.panoramaBackgrounds
+                                        )
+                                          ? node.settings.panoramaBackgrounds
+                                          : [];
+                                        const selectedBackground =
+                                          backgrounds.find(
+                                            (item) =>
+                                              item.id === stage.backgroundId
+                                          ) || null;
+                                        const backgroundUrl =
+                                          stage.backgroundUrl ||
+                                          selectedBackground?.imageUrl ||
+                                          "";
+                                        const viewerKey = `${node.id}:${shot.id}`;
+                                        const updateCamera = (patch) =>
+                                          updateShotPanoramaStage(
+                                            node.id,
+                                            shot,
+                                            {
+                                              camera: {
+                                                ...camera,
+                                                ...patch,
+                                              },
+                                            }
+                                          );
+                                        return (
+                                          <div
+                                            className={`rounded-lg border p-2 space-y-2 ${
+                                              theme === "dark"
+                                                ? "bg-zinc-950/40 border-zinc-800"
+                                                : theme === "solarized"
+                                                ? "bg-[#eee8d5]/50 border-[#d7cfb2]"
+                                                : "bg-zinc-50 border-zinc-200"
+                                            }`}
+                                            onMouseDown={(e) =>
+                                              e.stopPropagation()
+                                            }
+                                            onClick={(e) =>
+                                              e.stopPropagation()
+                                            }
+                                          >
+                                            <div className="flex items-center justify-between gap-2">
+                                              <div className="flex items-center gap-1 text-[10px] font-semibold opacity-80">
+                                                <Camera size={12} />
+                                                <span>全景背景 / 镜头</span>
+                                              </div>
+                                              <div className="flex items-center gap-1">
+                                                <select
+                                                  value={stage.backgroundId || ""}
+                                                  onChange={(e) => {
+                                                    const picked =
+                                                      backgrounds.find(
+                                                        (item) =>
+                                                          item.id ===
+                                                          e.target.value
+                                                      );
+                                                    updateShotPanoramaStage(
+                                                      node.id,
+                                                      shot,
+                                                      {
+                                                        backgroundId:
+                                                          picked?.id || "",
+                                                        backgroundUrl:
+                                                          picked?.imageUrl ||
+                                                          "",
+                                                      }
+                                                    );
+                                                  }}
+                                                  className={`text-[10px] rounded border px-1.5 py-1 max-w-[140px] ${
+                                                    theme === "dark"
+                                                      ? "bg-zinc-900 border-zinc-700 text-zinc-200"
+                                                      : "bg-white border-zinc-300 text-zinc-700"
+                                                  }`}
+                                                >
+                                                  <option value="">
+                                                    选择全景背景
+                                                  </option>
+                                                  {backgrounds.map((item) => (
+                                                    <option
+                                                      key={item.id}
+                                                      value={item.id}
+                                                    >
+                                                      {item.name || item.id}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                                <label
+                                                  className={`text-[10px] px-2 py-1 rounded border cursor-pointer ${
+                                                    theme === "dark"
+                                                      ? "bg-zinc-900 border-zinc-700 text-zinc-200 hover:bg-zinc-800"
+                                                      : "bg-white border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+                                                  }`}
+                                                >
+                                                  上传2:1
+                                                  <input
+                                                    type="file"
+                                                    className="hidden"
+                                                    accept="image/*"
+                                                    onChange={(e) => {
+                                                      addPanoramaBackgroundToStoryboard(
+                                                        node.id,
+                                                        shot,
+                                                        e.target.files?.[0]
+                                                      );
+                                                      e.target.value = "";
+                                                    }}
+                                                  />
+                                                </label>
+                                              </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-[160px_1fr] gap-2">
+                                              <div
+                                                className={`relative rounded-md overflow-hidden border h-24 ${
+                                                  theme === "dark"
+                                                    ? "bg-black border-zinc-800"
+                                                    : "bg-zinc-100 border-zinc-300"
+                                                }`}
+                                                onDoubleClick={() => {
+                                                  if (backgroundUrl) {
+                                                    setLightboxItem({
+                                                      url: backgroundUrl,
+                                                      type: "image",
+                                                    });
+                                                  }
+                                                }}
+                                              >
+                                                <PanoramaViewer
+                                                  ref={(instance) => {
+                                                    if (instance) {
+                                                      panoramaViewerRefs.current.set(
+                                                        viewerKey,
+                                                        instance
+                                                      );
+                                                    } else {
+                                                      panoramaViewerRefs.current.delete(
+                                                        viewerKey
+                                                      );
+                                                    }
+                                                  }}
+                                                  imageUrl={backgroundUrl}
+                                                  camera={camera}
+                                                  onCameraChange={(nextCamera) =>
+                                                    updateCamera(nextCamera)
+                                                  }
+                                                  label="Three.js"
+                                                />
+                                              </div>
+
+                                              <div className="space-y-1.5 min-w-0">
+                                                <div className="grid grid-cols-2 gap-1.5">
+                                                  <label className="text-[10px] opacity-80">
+                                                    视角 yaw
+                                                    <input
+                                                      type="range"
+                                                      min="-180"
+                                                      max="180"
+                                                      value={camera.yaw}
+                                                      onChange={(e) =>
+                                                        updateCamera({
+                                                          yaw: Number(
+                                                            e.target.value
+                                                          ),
+                                                        })
+                                                      }
+                                                      className="w-full"
+                                                    />
+                                                  </label>
+                                                  <label className="text-[10px] opacity-80">
+                                                    仰俯 pitch
+                                                    <input
+                                                      type="range"
+                                                      min="-85"
+                                                      max="85"
+                                                      value={camera.pitch}
+                                                      onChange={(e) =>
+                                                        updateCamera({
+                                                          pitch: Number(
+                                                            e.target.value
+                                                          ),
+                                                        })
+                                                      }
+                                                      className="w-full"
+                                                    />
+                                                  </label>
+                                                </div>
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                  <select
+                                                    value={camera.aspectRatio}
+                                                    onChange={(e) =>
+                                                      updateCamera({
+                                                        aspectRatio:
+                                                          e.target.value,
+                                                      })
+                                                    }
+                                                    className={`text-[10px] rounded border px-1 py-0.5 ${
+                                                      theme === "dark"
+                                                        ? "bg-zinc-900 border-zinc-700 text-zinc-200"
+                                                        : "bg-white border-zinc-300 text-zinc-700"
+                                                    }`}
+                                                  >
+                                                    {PANORAMA_ASPECT_OPTIONS.map(
+                                                      (ratio) => (
+                                                        <option
+                                                          key={ratio}
+                                                          value={ratio}
+                                                        >
+                                                          {ratio}
+                                                        </option>
+                                                      )
+                                                    )}
+                                                  </select>
+                                                  <input
+                                                    type="number"
+                                                    min="20"
+                                                    max="120"
+                                                    value={camera.fov}
+                                                    onChange={(e) =>
+                                                      updateCamera({
+                                                        fov: Number(
+                                                          e.target.value
+                                                        ),
+                                                      })
+                                                    }
+                                                    className={`w-14 text-[10px] rounded border px-1 py-0.5 ${
+                                                      theme === "dark"
+                                                        ? "bg-zinc-900 border-zinc-700 text-zinc-200"
+                                                        : "bg-white border-zinc-300 text-zinc-700"
+                                                    }`}
+                                                    title="FOV"
+                                                  />
+                                                  {PANORAMA_FOCAL_PRESETS.map(
+                                                    (focal) => (
+                                                      <button
+                                                        key={focal}
+                                                        onClick={() =>
+                                                          updateCamera({
+                                                            focalLength:
+                                                              focal,
+                                                            fov:
+                                                              focalLengthToFov(
+                                                                focal
+                                                              ),
+                                                          })
+                                                        }
+                                                        className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                                                          theme === "dark"
+                                                            ? "border-zinc-700 hover:bg-zinc-800"
+                                                            : "border-zinc-300 hover:bg-zinc-100"
+                                                        }`}
+                                                      >
+                                                        {focal}mm
+                                                      </button>
+                                                    )
+                                                  )}
+                                                </div>
+                                                <div className="flex items-center gap-1 flex-wrap">
+                                                  <button
+                                                    onClick={() =>
+                                                      capturePanoramaShotFrame(
+                                                        node.id,
+                                                        shot,
+                                                        {
+                                                          applyToInput: true,
+                                                        }
+                                                      )
+                                                    }
+                                                    disabled={!backgroundUrl}
+                                                    className={`text-[10px] px-2 py-1 rounded border ${
+                                                      backgroundUrl
+                                                        ? storyboardPrimaryButtonClass
+                                                        : storyboardMutedButtonClass
+                                                    }`}
+                                                  >
+                                                    截图为首帧
+                                                  </button>
+                                                  <button
+                                                    onClick={() =>
+                                                      redrawPanoramaShotFrame(
+                                                        node.id,
+                                                        shot
+                                                      )
+                                                    }
+                                                    disabled={!backgroundUrl}
+                                                    className={`text-[10px] px-2 py-1 rounded border ${
+                                                      backgroundUrl
+                                                        ? storyboardPrimaryButtonClass
+                                                        : storyboardMutedButtonClass
+                                                    }`}
+                                                  >
+                                                    原样超清重绘
+                                                  </button>
+                                                  {stage.captureUrl && (
+                                                    <button
+                                                      onClick={() =>
+                                                        setLightboxItem({
+                                                          url: stage.captureUrl,
+                                                          type: "image",
+                                                        })
+                                                      }
+                                                      className={`text-[10px] px-2 py-1 rounded border ${
+                                                        theme === "dark"
+                                                          ? "border-zinc-700 hover:bg-zinc-800"
+                                                          : "border-zinc-300 hover:bg-zinc-100"
+                                                      }`}
+                                                    >
+                                                      查看截图
+                                                    </button>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
                                           </div>
                                         );
                                       })()}

@@ -16,6 +16,16 @@
         "localhost:8188"
     ],
     "proxy_timeout": 300,
+    "mcp": {
+        "enabled": false,
+        "auth_token": "",
+        "allowed_origins": [
+            "http://127.0.0.1",
+            "http://localhost"
+        ],
+        "allowed_tools": [],
+        "audit_log": ".tapnow_mcp_audit.log"
+    },
     "features": {
         "file_server": true,
         "proxy_server": true,

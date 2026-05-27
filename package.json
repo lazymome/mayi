@@ -11,6 +11,8 @@
     "test:storyboard-parser": "node scripts/storyboard_project_parser_regression.cjs",
     "test:storyboard-roundtrip": "node scripts/storyboard_save_load_roundtrip_regression.cjs",
     "test:smoke-playwright": "node scripts/smoke_playwright_fallback.cjs",
+    "test:mcp-gateway": "node scripts/mcp_gateway_smoke.cjs",
+    "test:mcp-frontend": "node scripts/mcp_frontend_tools_smoke.cjs",
     "test:release:gates": "npm run test:k87 && npm run test:storyboard-parser && npm run test:storyboard-roundtrip"
   },
   "dependencies": {
@@ -23,7 +25,8 @@
     "openai": "^6.16.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-i18next": "^14.1.3"
+    "react-i18next": "^14.1.3",
+    "three": "^0.177.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.56",

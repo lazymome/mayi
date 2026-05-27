@@ -1,0 +1,82 @@
+{
+  "version": "1.0.0",
+  "name": "tapnow-local-mcp",
+  "description": "Tapnow Local Server MCP gateway manifest",
+  "tools": [
+    {
+      "name": "ping",
+      "description": "检查本地 MCP 网关是否可用。",
+      "risk": "low",
+      "default_enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "list_files",
+      "description": "列出 save_path 下的图片/视频文件，带 limit 限制。",
+      "risk": "readonly",
+      "default_enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 },
+          "offset": { "type": "integer", "minimum": 0, "default": 0 }
+        }
+      }
+    },
+    {
+      "name": "proxy_status",
+      "description": "返回代理配置状态，不开放任意代理转发。",
+      "risk": "readonly",
+      "default_enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "comfy_apps",
+      "description": "列出本地 ComfyUI 工作流应用目录。",
+      "risk": "readonly",
+      "default_enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "comfy_status",
+      "description": "查看 ComfyUI 队列状态或指定任务状态。",
+      "risk": "readonly",
+      "default_enabled": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "job_id": { "type": "string" },
+          "request_id": { "type": "string" },
+          "task_id": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "save_cache",
+      "description": "按本地缓存规则保存 base64 图片/视频内容。默认不启用，需 allowed_tools 显式放行。",
+      "risk": "write",
+      "default_enabled": false,
+      "input_schema": {
+        "type": "object",
+        "required": ["id", "content"],
+        "properties": {
+          "id": { "type": "string" },
+          "content": { "type": "string" },
+          "category": { "type": "string", "default": "characters" },
+          "ext": { "type": "string", "default": ".jpg" },
+          "type": { "type": "string", "enum": ["image", "video"], "default": "image" },
+          "custom_path": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

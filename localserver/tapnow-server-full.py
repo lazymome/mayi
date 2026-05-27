@@ -35,6 +35,8 @@ from datetime import datetime
 from io import BytesIO
 from email.utils import formatdate
 
+import mcp_gateway
+
 # ==============================================================================
 # SECTION 1: 依赖检查与全局配置
 # ==============================================================================
@@ -118,7 +120,14 @@ config = {
     "allow_overwrite": False,
     "log_enabled": True,
     "convert_png_to_jpg": True,
-    "jpg_quality": 95
+    "jpg_quality": 95,
+    "mcp": {
+        "enabled": False,
+        "auth_token": "",
+        "allowed_origins": ["http://127.0.0.1", "http://localhost"],
+        "allowed_tools": [],
+        "audit_log": ".tapnow_mcp_audit.log"
+    }
 }
 
 # 1.5 全局状态对象
@@ -159,12 +168,17 @@ def load_config_file():
             data = json.load(f)
             
         # 安全更新配置，不覆盖未定义的字段
+        for key in ("save_path", "image_save_path", "video_save_path", "auto_create_dir", "allow_overwrite", "log_enabled", "convert_png_to_jpg", "jpg_quality"):
+            if key in data:
+                config[key] = data[key]
         if data.get("allowed_roots"): config["allowed_roots"] = data["allowed_roots"]
         if data.get("proxy_allowed_hosts"): config["proxy_allowed_hosts"] = data["proxy_allowed_hosts"]
         if data.get("proxy_timeout"): config["proxy_timeout"] = int(data["proxy_timeout"])
+        if "mcp" in data and isinstance(data["mcp"], dict):
+            config["mcp"].update(data["mcp"])
 
         # [NEW] 允许通过 config 文件覆盖环境变量开关
-        # 例如 json 中: { "features": { "comfy_middleware": false } }
+
         if "features" in data and isinstance(data["features"], dict):
             for k, v in data["features"].items():
                 if k in FEATURES:
@@ -853,6 +867,50 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
         except:
             return None
 
+    def _mcp_context(self):
+        return {
+            "config": config,
+            "features": FEATURES,
+            "workflows_dir": WORKFLOWS_DIR,
+            "job_status": JOB_STATUS,
+            "status_lock": STATUS_LOCK,
+            "resolve_job_by_request_id": resolve_job_by_request_id,
+            "helpers": {
+                "ensure_dir": ensure_dir,
+                "safe_join": safe_join,
+                "is_path_allowed": is_path_allowed,
+                "is_image_file": is_image_file,
+                "is_video_file": is_video_file,
+                "convert_png_to_jpg": convert_png_to_jpg,
+            }
+        }
+
+    def handle_mcp_get(self, path):
+        try:
+            if path == '/mcp/status':
+                self._send_json({"success": True, "ok": True, "result": mcp_gateway.status(config, FEATURES)})
+                return
+            if path == '/mcp/tools':
+                self._send_json({
+                    "success": True,
+                    "ok": True,
+                    "auth_required": mcp_gateway.auth_required(config),
+                    "tools": mcp_gateway.visible_tools(config)
+                })
+                return
+            self._send_json({"success": False, "ok": False, "error": "MCP endpoint not found"}, 404)
+        except Exception as exc:
+            self._send_json({"success": False, "ok": False, "error": str(exc)}, 500)
+
+    def handle_mcp_call(self, body):
+        try:
+            response, status_code = mcp_gateway.call_tool(body, self.headers, self._mcp_context())
+            self._send_json(response, status_code)
+        except mcp_gateway.MCPError as exc:
+            self._send_json({"success": False, "ok": False, "tool": None, "error": str(exc)}, exc.status)
+        except Exception as exc:
+            self._send_json({"success": False, "ok": False, "tool": None, "error": str(exc)}, 500)
+
     # --- Router ---
 
     def do_OPTIONS(self):
@@ -863,6 +921,10 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        if path.startswith('/mcp/'):
+            self.handle_mcp_get(path)
+            return
 
         # 1. ComfyUI 路由
         if (path.startswith('/comfy/')
@@ -941,6 +1003,14 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        if path == '/mcp/call':
+            body = self._read_json_body()
+            if body is None:
+                self._send_json({"success": False, "ok": False, "tool": None, "error": "Invalid JSON"}, 400)
+                return
+            self.handle_mcp_call(body)
+            return
 
         # 1. ComfyUI 路由
         if (path.startswith('/comfy/')
