@@ -153,6 +153,23 @@ import {
   shouldAutoRunTapnowTool,
 } from "./mcp/toolPolicy";
 import PanoramaViewer from "./components/panorama/PanoramaViewer";
+import {
+  normalizeModelRoute,
+  normalizePricing,
+  normalizeProviderChannelFields,
+} from "./api/schemas";
+import { resolveModelRoute } from "./api/modelRouter";
+import { requestScheduler } from "./api/requestScheduler";
+import {
+  PROTOCOL_ANTHROPIC,
+  PROTOCOL_GEMINI,
+  PROTOCOL_MODELSCOPE,
+  PROTOCOL_OPENAI,
+  PROTOCOL_OPENAI_RESPONSE,
+  PROTOCOL_OPTIONS,
+  buildModelListRequest,
+  normalizeProtocolType,
+} from "./api/protocols";
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
 const t = i18n.t.bind(i18n);
@@ -2353,41 +2370,13 @@ const DEFAULT_BASE_URL = "https://ai.comfly.chat";
 const JIMENG_API_BASE_URL = "http://localhost:5100";
 const JIMENG_SESSION_ID = "7a16459fbd65d9c87b4ea44d3318f5fa";
 
-const API_TYPE_OPENAI = "openai";
-const API_TYPE_OPENAI_RESPONSE = "openai-response";
-const API_TYPE_GEMINI = "gemini";
-const API_TYPE_MODELSCOPE = "modelscope";
-const API_TYPE_OPTIONS = Object.freeze([
-  { value: API_TYPE_OPENAI, label: "OpenAI Compatible" },
-  { value: API_TYPE_OPENAI_RESPONSE, label: "OpenAI Responses" },
-  { value: API_TYPE_GEMINI, label: "Gemini" },
-  { value: API_TYPE_MODELSCOPE, label: "ModelScope" },
-]);
-const API_TYPE_VALUES = new Set(API_TYPE_OPTIONS.map((option) => option.value));
-const normalizeApiType = (value, fallback = API_TYPE_OPENAI) => {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, "-");
-  const aliases = {
-    "openai-responses": API_TYPE_OPENAI_RESPONSE,
-    "openai-response-api": API_TYPE_OPENAI_RESPONSE,
-    responses: API_TYPE_OPENAI_RESPONSE,
-    response: API_TYPE_OPENAI_RESPONSE,
-    google: API_TYPE_GEMINI,
-    "models-scope": API_TYPE_MODELSCOPE,
-  };
-  const resolved = aliases[normalized] || normalized;
-  if (API_TYPE_VALUES.has(resolved)) return resolved;
-  const normalizedFallback = String(fallback || "")
-    .trim()
-    .toLowerCase()
-    .replace(/_/g, "-");
-  const fallbackResolved = aliases[normalizedFallback] || normalizedFallback;
-  return API_TYPE_VALUES.has(fallbackResolved)
-    ? fallbackResolved
-    : API_TYPE_OPENAI;
-};
+const API_TYPE_OPENAI = PROTOCOL_OPENAI;
+const API_TYPE_OPENAI_RESPONSE = PROTOCOL_OPENAI_RESPONSE;
+const API_TYPE_GEMINI = PROTOCOL_GEMINI;
+const API_TYPE_MODELSCOPE = PROTOCOL_MODELSCOPE;
+const API_TYPE_ANTHROPIC = PROTOCOL_ANTHROPIC;
+const API_TYPE_OPTIONS = PROTOCOL_OPTIONS;
+const normalizeApiType = normalizeProtocolType;
 
 const normalizeOptionalApiType = (value) => {
   const normalized = String(value || "").trim();
@@ -6901,11 +6890,18 @@ function TapnowApp() {
       useProxy: false,
       forceAsync: false,
     };
+    const channelFields = normalizeProviderChannelFields(providerKey, config);
     return {
       ...defaults,
       ...config,
       apiType: normalizeApiType(config?.apiType, defaults.apiType),
       enabled: config?.enabled !== false,
+      channelId: channelFields.channelId,
+      priority: channelFields.priority,
+      routeStrategy: channelFields.routeStrategy,
+      limitPolicy: channelFields.limitPolicy,
+      pricing: channelFields.pricing,
+      tags: channelFields.tags,
     };
   };
 
@@ -11839,6 +11835,24 @@ function TapnowApp() {
         apiType:
           normalizeOptionalApiType(config.apiType) ||
           normalizeOptionalApiType(resolvedLibrary?.apiType),
+        pricing: normalizePricing(resolvedLibrary?.pricing || config.pricing),
+        route: normalizeModelRoute(
+          resolvedLibrary?.route ||
+            config.route || {
+              id: config.id,
+              logicalModelId: config.id,
+              candidates: [
+                {
+                  channelId: config.provider,
+                  providerId: config.provider,
+                  modelId:
+                    resolvedLibrary?.modelName || config.modelName || config.id,
+                  priority: config.priority ?? 50,
+                  costWeight: config.pricing?.costWeight ?? 1,
+                },
+              ],
+            }
+        ),
         disabled: resolvedLibrary
           ? !!resolvedLibrary.disabled
           : !!config.disabled,
@@ -12095,8 +12109,14 @@ function TapnowApp() {
         };
       }
 
+      const routeInfo = resolveModelRoute({
+        config,
+        providers,
+        strategy: config.route?.strategy || providers[config.provider]?.routeStrategy,
+      });
+      const providerKey = routeInfo?.channelId || config.provider;
       // V3.4.19: 只从 Provider 获取凭据，不再使用 model 级别的 key/url
-      const provider = providers[config.provider];
+      const provider = providers[providerKey] || providers[config.provider];
       // 如果Provider没有key，使用全局key作为最后fallback
       const key = provider?.key || globalApiKey;
       const url = (provider?.url || DEFAULT_BASE_URL).replace(/\/+$/, "");
@@ -12104,15 +12124,20 @@ function TapnowApp() {
       return {
         key,
         url,
-        modelName: config.modelName,
+        modelName: routeInfo?.modelId || config.modelName,
         displayName: config.displayName,
-        provider: config.provider,
+        provider: providerKey,
+        sourceProvider: config.provider,
+        routeInfo,
         type: config.type,
         apiType:
+          normalizeOptionalApiType(provider?.apiType) ||
           normalizeOptionalApiType(config.apiType) ||
-          normalizeApiType(provider?.apiType),
+          API_TYPE_OPENAI,
         useProxy: !!provider?.useProxy,
         forceAsync: !!provider?.forceAsync,
+        limitPolicy: provider?.limitPolicy || null,
+        pricing: config.pricing || provider?.pricing || null,
       };
     },
     [getApiConfigByKey, providers, globalApiKey]
@@ -15470,7 +15495,17 @@ function TapnowApp() {
       [providerKey]: { ...prev[providerKey], ...updates },
     }));
     if (
-      ["apiType", "key", "url", "useProxy", "forceAsync"].some(
+      [
+        "apiType",
+        "key",
+        "url",
+        "useProxy",
+        "forceAsync",
+        "priority",
+        "routeStrategy",
+        "limitPolicy",
+        "pricing",
+      ].some(
         (field) => field in updates
       )
     ) {
@@ -15523,25 +15558,22 @@ function TapnowApp() {
       return;
     }
 
-    const geminiBaseUrl = normalizeGeminiBaseUrl(baseUrl);
-    const testTargets = {
-      [API_TYPE_GEMINI]: `${geminiBaseUrl}/v1beta/models?key=${encodeURIComponent(
-        apiKey
-      )}`,
-      [API_TYPE_OPENAI_RESPONSE]: `${baseUrl}/v1/models`,
-      [API_TYPE_MODELSCOPE]: `${baseUrl}/v1/models`,
-      [API_TYPE_OPENAI]: `${baseUrl}/v1/models`,
-    };
-    const headers =
-      apiType === API_TYPE_GEMINI ? {} : { Authorization: `Bearer ${apiKey}` };
+    const modelListRequest = buildModelListRequest({
+      apiType,
+      baseUrl,
+      apiKey,
+      defaultBaseUrl: DEFAULT_BASE_URL,
+    });
 
     try {
-      const response = await fetch(
-        testTargets[apiType] || testTargets[API_TYPE_OPENAI],
-        {
-          method: "GET",
-          headers,
-        }
+      const response = await requestScheduler.run(
+        `${credentials.provider || config?.provider || "default"}:test`,
+        credentials.limitPolicy,
+        () =>
+          fetch(modelListRequest.url, {
+            method: "GET",
+            headers: modelListRequest.headers,
+          })
       );
       if (response.ok)
         setApiStatus((prev) => ({ ...prev, [statusKey]: "success" }));
@@ -22108,7 +22140,7 @@ function TapnowApp() {
         const customParams = Array.isArray(config?.customParams)
           ? config.customParams
           : [];
-        const providerKey = config?.provider;
+        const providerKey = credentials.provider || config?.provider;
         const apiType = normalizeApiType(
           credentials.apiType || providers[providerKey]?.apiType
         );
@@ -23354,11 +23386,17 @@ function TapnowApp() {
           }
 
           const finalUrl = buildProxyUrl(fullUrl, providerKey);
-          return await fetch(finalUrl, {
-            method: overrideMethod,
-            headers: overrideHeaders,
-            body: requestBody,
-          });
+          const schedulerKey = `${providerKey || "default"}:image`;
+          return await requestScheduler.run(
+            schedulerKey,
+            credentials.limitPolicy,
+            () =>
+              fetch(finalUrl, {
+                method: overrideMethod,
+                headers: overrideHeaders,
+                body: requestBody,
+              })
+          );
         };
 
         const apiKeysList =
@@ -53622,6 +53660,186 @@ ${inputText.substring(0, 15000)} ... (截断)
                                             : "bg-white border-zinc-300 text-zinc-900"
                                         }`}
                                         placeholder="https://..."
+                                      />
+                                    </div>
+                                    <div className="grid grid-cols-4 items-center gap-2">
+                                      <label
+                                        className={`text-[10px] font-medium uppercase tracking-wider text-right ${
+                                          theme === "dark"
+                                            ? "text-zinc-500"
+                                            : "text-zinc-600"
+                                        }`}
+                                      >
+                                        {t("路由策略")}
+                                      </label>
+                                      <div className="col-span-3 grid grid-cols-2 gap-2">
+                                        <select
+                                          value={
+                                            providers[providerKey]
+                                              ?.routeStrategy || "priority"
+                                          }
+                                          onChange={(e) =>
+                                            updateProviderConfig(providerKey, {
+                                              routeStrategy: e.target.value,
+                                            })
+                                          }
+                                          className={`w-full rounded px-2 py-1 text-xs outline-none focus:border-blue-600/50 border ${
+                                            theme === "dark"
+                                              ? "bg-zinc-900 border-zinc-800 text-zinc-300"
+                                              : "bg-white border-zinc-300 text-zinc-900"
+                                          }`}
+                                        >
+                                          <option value="priority">
+                                            {t("优先级优先")}
+                                          </option>
+                                          <option value="cost_first">
+                                            {t("成本优先")}
+                                          </option>
+                                          <option value="latency_first">
+                                            {t("延迟优先")}
+                                          </option>
+                                        </select>
+                                        <input
+                                          type="number"
+                                          value={
+                                            providers[providerKey]?.priority ??
+                                            50
+                                          }
+                                          onChange={(e) =>
+                                            updateProviderConfig(providerKey, {
+                                              priority:
+                                                Number(e.target.value) || 0,
+                                            })
+                                          }
+                                          className={`w-full rounded px-2 py-1 text-xs outline-none focus:border-blue-600/50 border ${
+                                            theme === "dark"
+                                              ? "bg-zinc-900 border-zinc-800 text-zinc-300"
+                                              : "bg-white border-zinc-300 text-zinc-900"
+                                          }`}
+                                          placeholder={t("优先级")}
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="grid grid-cols-4 items-center gap-2">
+                                      <label
+                                        className={`text-[10px] font-medium uppercase tracking-wider text-right ${
+                                          theme === "dark"
+                                            ? "text-zinc-500"
+                                            : "text-zinc-600"
+                                        }`}
+                                      >
+                                        {t("限流")}
+                                      </label>
+                                      <div className="col-span-3 grid grid-cols-3 gap-2">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          value={
+                                            providers[providerKey]?.limitPolicy
+                                              ?.maxConcurrency ?? 0
+                                          }
+                                          onChange={(e) =>
+                                            updateProviderConfig(providerKey, {
+                                              limitPolicy: {
+                                                ...providers[providerKey]
+                                                  ?.limitPolicy,
+                                                maxConcurrency:
+                                                  Number(e.target.value) || 0,
+                                              },
+                                            })
+                                          }
+                                          className={`w-full rounded px-2 py-1 text-xs outline-none focus:border-blue-600/50 border ${
+                                            theme === "dark"
+                                              ? "bg-zinc-900 border-zinc-800 text-zinc-300"
+                                              : "bg-white border-zinc-300 text-zinc-900"
+                                          }`}
+                                          placeholder={t("并发")}
+                                        />
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          value={
+                                            providers[providerKey]?.limitPolicy
+                                              ?.rpm ?? 0
+                                          }
+                                          onChange={(e) =>
+                                            updateProviderConfig(providerKey, {
+                                              limitPolicy: {
+                                                ...providers[providerKey]
+                                                  ?.limitPolicy,
+                                                rpm:
+                                                  Number(e.target.value) || 0,
+                                              },
+                                            })
+                                          }
+                                          className={`w-full rounded px-2 py-1 text-xs outline-none focus:border-blue-600/50 border ${
+                                            theme === "dark"
+                                              ? "bg-zinc-900 border-zinc-800 text-zinc-300"
+                                              : "bg-white border-zinc-300 text-zinc-900"
+                                          }`}
+                                          placeholder="RPM"
+                                        />
+                                        <input
+                                          type="number"
+                                          min="1000"
+                                          value={
+                                            providers[providerKey]?.limitPolicy
+                                              ?.timeoutMs ?? 300000
+                                          }
+                                          onChange={(e) =>
+                                            updateProviderConfig(providerKey, {
+                                              limitPolicy: {
+                                                ...providers[providerKey]
+                                                  ?.limitPolicy,
+                                                timeoutMs:
+                                                  Number(e.target.value) ||
+                                                  300000,
+                                              },
+                                            })
+                                          }
+                                          className={`w-full rounded px-2 py-1 text-xs outline-none focus:border-blue-600/50 border ${
+                                            theme === "dark"
+                                              ? "bg-zinc-900 border-zinc-800 text-zinc-300"
+                                              : "bg-white border-zinc-300 text-zinc-900"
+                                          }`}
+                                          placeholder={t("超时ms")}
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="grid grid-cols-4 items-center gap-2">
+                                      <label
+                                        className={`text-[10px] font-medium uppercase tracking-wider text-right ${
+                                          theme === "dark"
+                                            ? "text-zinc-500"
+                                            : "text-zinc-600"
+                                        }`}
+                                      >
+                                        {t("价格权重")}
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0.0001"
+                                        step="0.1"
+                                        value={
+                                          providers[providerKey]?.pricing
+                                            ?.costWeight ?? 1
+                                        }
+                                        onChange={(e) =>
+                                          updateProviderConfig(providerKey, {
+                                            pricing: {
+                                              ...providers[providerKey]
+                                                ?.pricing,
+                                              costWeight:
+                                                Number(e.target.value) || 1,
+                                            },
+                                          })
+                                        }
+                                        className={`col-span-3 w-full rounded px-2 py-1 text-xs outline-none focus:border-blue-600/50 border ${
+                                          theme === "dark"
+                                            ? "bg-zinc-900 border-zinc-800 text-zinc-300"
+                                            : "bg-white border-zinc-300 text-zinc-900"
+                                        }`}
+                                        placeholder="1.0"
                                       />
                                     </div>
                                   </div>
