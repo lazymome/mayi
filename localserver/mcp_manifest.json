@@ -23,7 +23,7 @@
         "type": "object",
         "properties": {
           "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 },
-          "offset": { "type": "integer", "minimum": 0, "default": 0 }
+          "offset": { "type": "integer", "minimum": 0, "maximum": 1000000, "default": 0 }
         },
         "additionalProperties": false
       }
@@ -58,9 +58,9 @@
       "input_schema": {
         "type": "object",
         "properties": {
-          "job_id": { "type": "string" },
-          "request_id": { "type": "string" },
-          "task_id": { "type": "string" }
+          "job_id": { "type": "string", "maxLength": 160 },
+          "request_id": { "type": "string", "maxLength": 160 },
+          "task_id": { "type": "string", "maxLength": 160 }
         },
         "additionalProperties": false
       }
@@ -74,12 +74,12 @@
         "type": "object",
         "required": ["id", "content"],
         "properties": {
-          "id": { "type": "string" },
-          "content": { "type": "string" },
-          "category": { "type": "string", "default": "characters" },
-          "ext": { "type": "string", "default": ".jpg" },
+          "id": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "content": { "type": "string", "minLength": 1 },
+          "category": { "type": "string", "maxLength": 160, "default": "characters" },
+          "ext": { "type": "string", "maxLength": 16, "default": ".jpg" },
           "type": { "type": "string", "enum": ["image", "video"], "default": "image" },
-          "custom_path": { "type": "string" }
+          "custom_path": { "type": "string", "maxLength": 512 }
         },
         "additionalProperties": false
       }

@@ -25,15 +25,20 @@
 ## MCP 工具
 
 - 新增工具必须同时修改 `toolRegistry.js`、`toolExecutor.js`，必要时修改 `toolPolicy.js`。
+- 前端 tools schema 与 `toolPolicy.js` 的数量/长度上限必须一致；当前安全基线为批量图片最多 4 张、图片对比最多 3 个模型、参考图最多 4 张。
 - 每个工具必须声明 `risk`，并遵守 read/write/generate/external 的确认策略。
 - 生成、批量、外部调用、文件写入类工具必须有参数上限和用户确认。
 - 工具结果不得包含 API Key、完整本地绝对路径、大体积 Base64 或不必要的隐私字段。
+- 所有可由模型填写的长文本、URL、ID、数组参数必须在 schema 中声明 `maxLength`、`maxItems` 或业务等价限制。
+- 回填给 Chat 的工具结果必须先摘要化/截断；data URL、Base64、长数组和深层对象不得原样进入模型上下文。
 - 新增 MCP 行为应补充 smoke 测试或至少在 `test:mcp-frontend` / `test:mcp-gateway` 中覆盖关键路径。
+- 新增本地 MCP 工具必须同步更新 `localserver/mcp_manifest.json`、`localserver/mcp_gateway.py`、`docs/mcp-architecture.md` 和 `localserver/LocalServer_README.md`。
 
 ## 本地服务
 
 - 新增端点必须有路径白名单、请求大小上限、超时或明确错误返回。
 - 文件写入必须校验扩展名、保存根目录和覆盖策略。
+- 文件名、分类名和用户传入相对路径必须净化，禁止 `..`、路径分隔符穿透和不受控特殊字符；默认不得回传本地绝对路径。
 - 长时间运行的状态表、队列、缓存必须有 TTL 或最大条目数。
 - 对外部网络请求必须尊重 proxy allowlist，不新增任意转发入口。
 
@@ -57,4 +62,3 @@ python -m py_compile localserver/tapnow-server-full.py localserver/mcp_gateway.p
 ```bash
 npm run release:windows
 ```
-

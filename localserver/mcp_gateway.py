@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from datetime import datetime
 
 MANIFEST_FILENAME = "mcp_manifest.json"
@@ -16,6 +17,7 @@ ALLOWED_CACHE_EXTENSIONS = {
     "image": {".jpg", ".jpeg", ".png", ".webp", ".gif"},
     "video": {".mp4", ".webm", ".mov"},
 }
+SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class MCPError(Exception):
@@ -244,6 +246,28 @@ def _limited_int(value, default, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
+def _safe_name(value, fallback="item", max_length=128):
+    if not isinstance(value, str):
+        value = str(value or "")
+    value = value.replace("\\", "/").split("/")[-1].strip()
+    value = SAFE_NAME_RE.sub("_", value).strip("._-")
+    if not value:
+        value = fallback
+    return value[:max_length]
+
+
+def _safe_category(value):
+    if not isinstance(value, str):
+        raise MCPError("非法分类")
+    normalized = value.replace("\\", "/").strip("/")
+    if not normalized or ".." in normalized.split("/"):
+        raise MCPError("非法分类")
+    parts = [_safe_name(part, "category", 64) for part in normalized.split("/") if part]
+    if not parts:
+        raise MCPError("非法分类")
+    return os.path.join(*parts)
+
+
 def _tool_ping(arguments, context):
     return {"message": "pong", "time": datetime.utcnow().isoformat() + "Z"}
 
@@ -331,8 +355,8 @@ def _tool_save_cache(arguments, context):
     custom_path = arguments.get("custom_path", "")
     if not item_id or not content:
         raise MCPError("缺少ID或内容")
-    if not isinstance(category, str) or ".." in category.replace('\\', '/'):
-        raise MCPError("非法分类")
+    safe_item_id = _safe_name(item_id)
+    safe_category = _safe_category(category)
     if not isinstance(filename_ext, str) or not filename_ext.startswith(".") or len(filename_ext) > 16:
         raise MCPError("非法扩展名")
     filename_ext = filename_ext.lower()
@@ -353,13 +377,13 @@ def _tool_save_cache(arguments, context):
         base_root = config["save_path"]
     elif file_type == "video" and config.get("video_save_path"):
         base_root = config["video_save_path"]
-        cache_dir = os.path.join(base_root, category)
+        cache_dir = os.path.join(base_root, safe_category)
     elif file_type == "image" and config.get("image_save_path"):
         base_root = config["image_save_path"]
-        cache_dir = os.path.join(base_root, category)
+        cache_dir = os.path.join(base_root, safe_category)
     else:
         base_root = config["save_path"]
-        cache_dir = os.path.join(base_root, ".tapnow_cache", category)
+        cache_dir = os.path.join(base_root, ".tapnow_cache", safe_category)
     helpers["ensure_dir"](cache_dir)
     if "," in content:
         content = content.split(",", 1)[1]
@@ -379,7 +403,7 @@ def _tool_save_cache(arguments, context):
         file_data, converted = helpers["convert_png_to_jpg"](file_data, config.get("jpg_quality", 95))
         if converted:
             filename_ext = ".jpg"
-    filename = "%s%s" % (item_id, filename_ext)
+    filename = "%s%s" % (safe_item_id, filename_ext)
     filepath = os.path.join(cache_dir, filename)
     with open(filepath, "wb") as f:
         f.write(file_data)
@@ -387,10 +411,10 @@ def _tool_save_cache(arguments, context):
         rel_path = os.path.relpath(filepath, base_root).replace('\\', '/')
     except ValueError:
         rel_path = os.path.relpath(filepath, cache_dir).replace('\\', '/')
-        rel_path = ".tapnow_cache/%s/%s" % (category, rel_path) if base_root == config["save_path"] else "%s/%s" % (category, rel_path)
+        rel_path = ".tapnow_cache/%s/%s" % (safe_category.replace('\\', '/'), rel_path) if base_root == config["save_path"] else "%s/%s" % (safe_category.replace('\\', '/'), rel_path)
     if rel_path.startswith(".."):
         rel_path = os.path.relpath(filepath, cache_dir).replace('\\', '/')
-        rel_path = ".tapnow_cache/%s/%s" % (category, rel_path) if base_root == config["save_path"] else "%s/%s" % (category, rel_path)
+        rel_path = ".tapnow_cache/%s/%s" % (safe_category.replace('\\', '/'), rel_path) if base_root == config["save_path"] else "%s/%s" % (safe_category.replace('\\', '/'), rel_path)
     local_url = "http://127.0.0.1:%s/file/%s" % (config["port"], rel_path)
     result = {
         "url": local_url,
@@ -410,7 +434,10 @@ def _tool_comfy_apps(arguments, context):
     apps = []
     if os.path.exists(workflows_dir):
         apps = [d for d in os.listdir(workflows_dir) if os.path.isdir(os.path.join(workflows_dir, d))]
-    return {"apps": apps, "workflows_dir": workflows_dir}
+    result = {"apps": apps}
+    if get_mcp_config(context["config"]).get("expose_absolute_paths"):
+        result["workflows_dir"] = workflows_dir
+    return result
 
 
 def _tool_comfy_status(arguments, context):

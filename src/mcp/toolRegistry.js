@@ -7,6 +7,12 @@ export const TOOL_RISK = {
   EXTERNAL: "external",
 };
 
+const TEXT_INPUT_MAX_LENGTH = 12000;
+const URL_INPUT_MAX_LENGTH = 4096;
+const REFERENCE_IMAGE_MAX_ITEMS = 4;
+const BATCH_IMAGE_MAX_COUNT = 4;
+const COMPARE_IMAGE_MAX_MODELS = 3;
+
 export const TAPNOW_CORE_TOOLS = [
   {
     name: "list_models",
@@ -63,7 +69,7 @@ export const TAPNOW_CORE_TOOLS = [
           maximum: 200,
           description: "返回节点数量，默认 50。",
         },
-        type: { type: "string", description: "可选节点类型过滤。" },
+        type: { type: "string", maxLength: 80, description: "可选节点类型过滤。" },
       },
       additionalProperties: false,
     },
@@ -98,7 +104,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        type: { type: "string", description: "节点类型，例如 text-node、input-image。" },
+        type: { type: "string", maxLength: 80, description: "节点类型，例如 text-node、input-image。" },
         limit: { type: "number", minimum: 1, maximum: 200, description: "返回数量，默认 50。" },
       },
       required: ["type"],
@@ -124,7 +130,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        text: { type: "string", description: "文本节点内容。" },
+        text: { type: "string", maxLength: TEXT_INPUT_MAX_LENGTH, description: "文本节点内容。" },
         x: { type: "number", description: "画布世界坐标 X。" },
         y: { type: "number", description: "画布世界坐标 Y。" },
       },
@@ -140,7 +146,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        url: { type: "string", description: "图片 URL 或 data URL。" },
+        url: { type: "string", maxLength: URL_INPUT_MAX_LENGTH, description: "图片 URL 或 data URL。" },
         x: { type: "number", description: "画布世界坐标 X。" },
         y: { type: "number", description: "画布世界坐标 Y。" },
       },
@@ -156,7 +162,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        historyId: { type: "string", description: "历史记录 ID。" },
+        historyId: { type: "string", maxLength: 160, description: "历史记录 ID。" },
       },
       required: ["historyId"],
       additionalProperties: false,
@@ -170,7 +176,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        prompt: { type: "string", description: "图片提示词。" },
+        prompt: { type: "string", maxLength: TEXT_INPUT_MAX_LENGTH, description: "图片提示词。" },
         model: {
           type: "string",
           description: "可选模型 key，不传则使用默认图片模型。",
@@ -182,7 +188,8 @@ export const TAPNOW_CORE_TOOLS = [
         },
         referenceImages: {
           type: "array",
-          items: { type: "string" },
+          items: { type: "string", maxLength: URL_INPUT_MAX_LENGTH },
+          maxItems: REFERENCE_IMAGE_MAX_ITEMS,
           description: "参考图 URL 列表。",
         },
       },
@@ -198,12 +205,12 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        prompt: { type: "string", description: "图片提示词。" },
+        prompt: { type: "string", maxLength: TEXT_INPUT_MAX_LENGTH, description: "图片提示词。" },
         count: {
           type: "number",
           minimum: 1,
-          maximum: 10,
-          description: "生成张数，默认 3，最大 10。",
+          maximum: BATCH_IMAGE_MAX_COUNT,
+          description: "生成张数，默认 3，最大 4。",
         },
         model: {
           type: "string",
@@ -216,7 +223,8 @@ export const TAPNOW_CORE_TOOLS = [
         },
         referenceImages: {
           type: "array",
-          items: { type: "string" },
+          items: { type: "string", maxLength: URL_INPUT_MAX_LENGTH },
+          maxItems: REFERENCE_IMAGE_MAX_ITEMS,
           description: "参考图 URL 列表。",
         },
       },
@@ -232,11 +240,13 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        prompt: { type: "string", description: "图片提示词。" },
+        prompt: { type: "string", maxLength: TEXT_INPUT_MAX_LENGTH, description: "图片提示词。" },
         models: {
           type: "array",
-          items: { type: "string" },
-          description: "模型 key 列表，建议 2 个，最多 4 个。",
+          items: { type: "string", maxLength: 160 },
+          minItems: 1,
+          maxItems: COMPARE_IMAGE_MAX_MODELS,
+          description: "模型 key 列表，建议 2 个，最多 3 个。",
         },
         ratio: { type: "string", description: "比例，例如 1:1、16:9、Auto。" },
         resolution: {
@@ -245,7 +255,8 @@ export const TAPNOW_CORE_TOOLS = [
         },
         referenceImages: {
           type: "array",
-          items: { type: "string" },
+          items: { type: "string", maxLength: URL_INPUT_MAX_LENGTH },
+          maxItems: REFERENCE_IMAGE_MAX_ITEMS,
           description: "参考图 URL 列表。",
         },
       },
@@ -261,7 +272,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        prompt: { type: "string", description: "视频提示词。" },
+        prompt: { type: "string", maxLength: TEXT_INPUT_MAX_LENGTH, description: "视频提示词。" },
         model: {
           type: "string",
           description: "可选模型 key，不传则使用默认视频模型。",
@@ -274,7 +285,8 @@ export const TAPNOW_CORE_TOOLS = [
         duration: { type: "string", description: "时长，例如 5s、10s、15s。" },
         referenceImages: {
           type: "array",
-          items: { type: "string" },
+          items: { type: "string", maxLength: URL_INPUT_MAX_LENGTH },
+          maxItems: REFERENCE_IMAGE_MAX_ITEMS,
           description: "参考图 URL 列表。",
         },
       },
@@ -290,7 +302,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        nodeId: { type: "string", description: "分镜节点 ID。" },
+        nodeId: { type: "string", maxLength: 160, description: "分镜节点 ID。" },
         mode: {
           type: "string",
           enum: ["script", "novel", "custom"],
@@ -310,7 +322,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        nodeId: { type: "string", description: "分镜节点 ID。" },
+        nodeId: { type: "string", maxLength: 160, description: "分镜节点 ID。" },
       },
       required: ["nodeId"],
       additionalProperties: false,
@@ -324,8 +336,8 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        nodeId: { type: "string", description: "分镜节点 ID。" },
-        shotId: { type: "string", description: "镜头 ID。" },
+        nodeId: { type: "string", maxLength: 160, description: "分镜节点 ID。" },
+        shotId: { type: "string", maxLength: 160, description: "镜头 ID。" },
         mode: {
           type: "string",
           enum: ["image", "video", "auto"],
@@ -345,7 +357,7 @@ export const TAPNOW_CORE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        taskId: { type: "string", description: "历史记录 ID 或任务 ID。" },
+        taskId: { type: "string", maxLength: 160, description: "历史记录 ID 或任务 ID。" },
       },
       required: ["taskId"],
       additionalProperties: false,
@@ -425,9 +437,30 @@ export const extractTapnowToolCalls = (payload) => {
   );
 };
 
+const sanitizeToolResultForChat = (value, depth = 0) => {
+  if (depth > 6) return "[MaxDepth]";
+  if (typeof value === "string") {
+    if (/^data:/i.test(value)) return `[DataURL:${value.length} chars]`;
+    if (value.length > 2000) return `${value.slice(0, 2000)}...[truncated:${value.length}]`;
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const items = value.slice(0, 50).map((item) => sanitizeToolResultForChat(item, depth + 1));
+    if (value.length > 50) items.push(`[${value.length - 50} more items]`);
+    return items;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, sanitizeToolResultForChat(child, depth + 1)])
+    );
+  }
+  return value;
+};
+
 export const formatToolResultForChat = (result) => {
   try {
-    return JSON.stringify(result ?? null, null, 2);
+    const text = JSON.stringify(sanitizeToolResultForChat(result ?? null), null, 2);
+    return text.length > 12000 ? `${text.slice(0, 12000)}\n...[tool result truncated:${text.length}]` : text;
   } catch {
     return String(result);
   }
