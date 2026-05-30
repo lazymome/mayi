@@ -1,6 +1,8 @@
+import './app/installConsoleFilters.js'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App.jsx'
+import AppShell from './app/AppShell.jsx'
+import { TapnowProjectProvider } from './domain/project/projectStore.jsx'
 import './index.css'
 import i18n from './i18n'
 
@@ -160,7 +162,9 @@ try {
         <React.StrictMode>
             <ErrorBoundary>
                 <BootGuard>
-                    <App />
+                    <TapnowProjectProvider>
+                        <AppShell />
+                    </TapnowProjectProvider>
                 </BootGuard>
             </ErrorBoundary>
         </React.StrictMode>

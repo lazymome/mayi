@@ -25,6 +25,9 @@ import threading
 import webbrowser
 import http.client
 import queue
+import shutil
+import hashlib
+import subprocess
 import time
 import uuid
 import mimetypes
@@ -149,6 +152,8 @@ config = {
 JOB_QUEUE = queue.Queue()
 JOB_STATUS = {}
 STATUS_LOCK = threading.Lock()
+MEDIA_JOB_STATUS = {}
+MEDIA_STATUS_LOCK = threading.Lock()
 CLIENT_ID = str(uuid.uuid4())
 WS_MESSAGES = {}
 PROMPT_TO_JOB = {}
@@ -309,6 +314,223 @@ def cleanup_job_state(now=None):
             if prompt_id:
                 PROMPT_TO_JOB.pop(prompt_id, None)
                 WS_MESSAGES.pop(prompt_id, None)
+
+def get_ffmpeg_status():
+    """Return ffmpeg/ffprobe discovery info for desktop media-service planning."""
+    return {
+        "ffmpeg": shutil.which("ffmpeg"),
+        "ffprobe": shutil.which("ffprobe"),
+    }
+
+ASSET_EXTENSION_TYPE_MAP = {
+    '.jpg': 'image', '.jpeg': 'image', '.png': 'image', '.webp': 'image', '.gif': 'image',
+    '.mp4': 'video', '.mov': 'video', '.webm': 'video', '.mkv': 'video', '.avi': 'video', '.m4v': 'video',
+    '.mp3': 'audio', '.wav': 'audio', '.m4a': 'audio',
+    '.srt': 'subtitle', '.vtt': 'subtitle', '.ass': 'subtitle',
+    '.tapnowproj': 'project',
+}
+
+def infer_asset_type(filename):
+    return ASSET_EXTENSION_TYPE_MAP.get(os.path.splitext(filename or '')[1].lower(), 'project')
+
+def hash_file_quick(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        first = handle.read(1024 * 1024)
+        digest.update(first)
+        try:
+            handle.seek(max(0, os.path.getsize(path) - 1024 * 1024))
+            digest.update(handle.read(1024 * 1024))
+        except Exception:
+            pass
+    stat = os.stat(path)
+    digest.update(str(stat.st_size).encode('utf-8'))
+    digest.update(str(stat.st_mtime).encode('utf-8'))
+    return digest.hexdigest()
+
+def get_media_work_dir(kind='thumbnails'):
+    base = os.environ.get('TAPNOW_USER_DATA_DIR') or config.get('save_path') or DEFAULT_SAVE_PATH
+    target = os.path.join(base, kind)
+    ensure_dir(target)
+    return target
+
+def make_thumbnail_output_path(source_path):
+    stem = hashlib.sha1(os.path.abspath(source_path).encode('utf-8')).hexdigest()[:16]
+    return os.path.join(get_media_work_dir('thumbnails'), f'{stem}.jpg')
+
+def create_image_thumbnail(source_path, output_path):
+    if not PIL_AVAILABLE:
+        raise RuntimeError('Pillow is not available')
+    with Image.open(source_path) as image:
+        image.thumbnail((480, 270))
+        rgb = image.convert('RGB')
+        ensure_dir(os.path.dirname(output_path))
+        rgb.save(output_path, 'JPEG', quality=82)
+    return output_path
+
+def create_video_thumbnail(source_path, output_path, timestamp='00:00:01'):
+    ffmpeg = get_ffmpeg_status().get('ffmpeg')
+    if not ffmpeg:
+        raise RuntimeError('ffmpeg is not available')
+    ensure_dir(os.path.dirname(output_path))
+    command = [ffmpeg, '-y', '-ss', str(timestamp), '-i', source_path, '-frames:v', '1', '-vf', 'scale=480:-2', output_path]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr[-1000:] or 'ffmpeg thumbnail failed')
+    return output_path
+
+def create_thumbnail_for_asset(source_path, asset_type):
+    if asset_type not in ('image', 'video'):
+        return ''
+    output_path = make_thumbnail_output_path(source_path)
+    if os.path.exists(output_path):
+        return output_path
+    if asset_type == 'image':
+        return create_image_thumbnail(source_path, output_path)
+    return create_video_thumbnail(source_path, output_path)
+
+def build_asset_record(path, generate_thumbnail=False):
+    stat = os.stat(path)
+    name = os.path.basename(path)
+    asset_type = infer_asset_type(name)
+    thumbnail_path = ''
+    if generate_thumbnail:
+        try:
+            thumbnail_path = create_thumbnail_for_asset(path, asset_type)
+        except Exception as exc:
+            log(f'[Media] 缩略图生成失败 {path}: {exc}')
+    return {
+        'id': 'asset_' + hashlib.sha1(os.path.abspath(path).encode('utf-8')).hexdigest()[:16],
+        'type': asset_type,
+        'name': name,
+        'path': os.path.abspath(path),
+        'hash': hash_file_quick(path),
+        'thumbnailPath': thumbnail_path,
+        'createdAt': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+        'updatedAt': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        'metadata': {
+            'size': stat.st_size,
+            'mtime': stat.st_mtime,
+            'extension': os.path.splitext(name)[1].lower(),
+        },
+    }
+
+def scan_asset_directory(directory, recursive=True, generate_thumbnails=False):
+    root = os.path.abspath(os.path.expanduser(directory or ''))
+    if not root or not os.path.isdir(root):
+        raise ValueError('Directory does not exist')
+    assets = []
+    walker = os.walk(root) if recursive else [(root, [], os.listdir(root))]
+    for current_root, _dirs, filenames in walker:
+        for filename in filenames:
+            if os.path.splitext(filename)[1].lower() not in ASSET_EXTENSION_TYPE_MAP:
+                continue
+            file_path = os.path.join(current_root, filename)
+            try:
+                assets.append(build_asset_record(file_path, generate_thumbnails))
+            except Exception as exc:
+                log(f'[Media] 资产扫描跳过 {file_path}: {exc}')
+    return assets
+
+def update_media_job(job_id, **patch):
+    with MEDIA_STATUS_LOCK:
+        job = MEDIA_JOB_STATUS.get(job_id)
+        if not job:
+            return None
+        job.update(patch)
+        job['updated_at'] = time.time()
+        return job
+
+def run_media_job(job_id):
+    job = resolve_media_job(job_id)
+    if not job:
+        return
+    payload = job.get('payload') or {}
+    job_type = job.get('type') or 'unknown'
+    update_media_job(job_id, status='running', progress=5, started_at=time.time())
+    try:
+        if job_type in ('thumbnail', 'thumbnail.videoFrame'):
+            input_path = payload.get('inputPath') or payload.get('path')
+            if not input_path or not os.path.exists(input_path):
+                raise ValueError('inputPath does not exist')
+            asset_type = payload.get('assetType') or infer_asset_type(input_path)
+            output_path = payload.get('outputPath') or make_thumbnail_output_path(input_path)
+            if asset_type == 'image':
+                create_image_thumbnail(input_path, output_path)
+            else:
+                create_video_thumbnail(input_path, output_path, payload.get('timestamp') or '00:00:01')
+            result = {'thumbnailPath': output_path}
+        elif job_type == 'transcode':
+            ffmpeg = get_ffmpeg_status().get('ffmpeg')
+            if not ffmpeg:
+                raise RuntimeError('ffmpeg is not available')
+            input_path = payload.get('inputPath')
+            output_path = payload.get('outputPath')
+            if not input_path or not os.path.exists(input_path) or not output_path:
+                raise ValueError('inputPath/outputPath is required')
+            ensure_dir(os.path.dirname(os.path.abspath(output_path)))
+            args = payload.get('args') if isinstance(payload.get('args'), list) else ['-c:v', 'libx264', '-c:a', 'aac']
+            command = [ffmpeg, '-y', '-i', input_path, *[str(arg) for arg in args], output_path]
+            result_proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3600)
+            if result_proc.returncode != 0:
+                raise RuntimeError(result_proc.stderr[-2000:] or 'ffmpeg transcode failed')
+            result = {'outputPath': output_path, 'stderr': result_proc.stderr[-2000:]}
+        elif job_type in ('concat', 'export'):
+            ffmpeg = get_ffmpeg_status().get('ffmpeg')
+            if not ffmpeg:
+                raise RuntimeError('ffmpeg is not available')
+            inputs = payload.get('inputs') or payload.get('inputPaths') or []
+            output_path = payload.get('outputPath')
+            if not inputs or not output_path:
+                raise ValueError('inputs/outputPath is required')
+            for item in inputs:
+                if not os.path.exists(item):
+                    raise ValueError(f'Input does not exist: {item}')
+            ensure_dir(os.path.dirname(os.path.abspath(output_path)))
+            concat_file = os.path.join(get_media_work_dir('jobs'), f'{job_id}.txt')
+            with open(concat_file, 'w', encoding='utf-8') as handle:
+                for item in inputs:
+                    safe_item = os.path.abspath(item).replace("'", "'\\''")
+                    handle.write(f"file '{safe_item}'\n")
+            args = payload.get('args') if isinstance(payload.get('args'), list) else ['-c', 'copy']
+            command = [ffmpeg, '-y', '-f', 'concat', '-safe', '0', '-i', concat_file, *[str(arg) for arg in args], output_path]
+            result_proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3600)
+            if result_proc.returncode != 0:
+                raise RuntimeError(result_proc.stderr[-2000:] or 'ffmpeg concat/export failed')
+            result = {'outputPath': output_path, 'stderr': result_proc.stderr[-2000:]}
+        else:
+            raise ValueError(f'Unsupported media job type: {job_type}')
+        update_media_job(job_id, status='completed', progress=100, result=result, finished_at=time.time())
+    except Exception as exc:
+        update_media_job(job_id, status='failed', progress=100, error=str(exc), finished_at=time.time())
+
+def create_media_job(job_type, payload=None):
+    """Create a media job and execute it in a background thread."""
+    now = time.time()
+    job_id = str(uuid.uuid4())
+    job = {
+        "id": job_id,
+        "type": job_type or "unknown",
+        "status": "pending",
+        "progress": 0,
+        "payload": payload or {},
+        "result": None,
+        "error": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with MEDIA_STATUS_LOCK:
+        MEDIA_JOB_STATUS[job_id] = job
+    threading.Thread(target=run_media_job, args=(job_id,), daemon=True).start()
+    return job
+
+def list_media_jobs():
+    with MEDIA_STATUS_LOCK:
+        return list(MEDIA_JOB_STATUS.values())
+
+def resolve_media_job(job_id):
+    with MEDIA_STATUS_LOCK:
+        return MEDIA_JOB_STATUS.get(job_id)
 
 class BoundedThreadingHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer with a configurable request concurrency cap."""
@@ -1015,6 +1237,89 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"success": False, "ok": False, "tool": None, "error": str(exc)}, 500)
 
+    def handle_media_get(self, path):
+        """Desktop media-service planning endpoints for future ffmpeg pipelines."""
+        if path == '/media/file':
+            params = parse_qs(urlparse(self.path).query or '')
+            target_path = params.get('path', [''])[0]
+            target_path = os.path.abspath(os.path.expanduser(unquote(target_path)))
+            if not os.path.exists(target_path) or not os.path.isfile(target_path):
+                self._send_json({"success": False, "ok": False, "error": "Media file not found"}, 404)
+                return
+            try:
+                ctype = mimetypes.guess_type(target_path)[0] or 'application/octet-stream'
+                self.send_response(200)
+                self.send_header('Content-Type', ctype)
+                self.send_header('Cache-Control', LOCAL_FILE_CACHE_CONTROL)
+                self._send_cors()
+                self.end_headers()
+                with open(target_path, 'rb') as handle:
+                    shutil.copyfileobj(handle, self.wfile)
+            except Exception as exc:
+                log(f'[Media] 文件读取失败: {exc}')
+            return
+
+        if path == '/media/status':
+            ffmpeg = get_ffmpeg_status()
+            self._send_json({
+                "success": True,
+                "ok": True,
+                "service": "tapnow-media",
+                "ffmpeg": ffmpeg,
+                "capabilities": [
+                    "metadata",
+                    "thumbnail",
+                    "transcode",
+                    "concat",
+                    "subtitle-burn",
+                    "filter",
+                    "export",
+                ],
+                "ready": bool(ffmpeg.get("ffmpeg")),
+            })
+            return
+
+        if path == '/media/jobs':
+            self._send_json({"success": True, "ok": True, "jobs": list_media_jobs()})
+            return
+
+        if path.startswith('/media/jobs/'):
+            job_id = path.split('/media/jobs/', 1)[1]
+            job = resolve_media_job(job_id)
+            if not job:
+                self._send_json({"success": False, "ok": False, "error": "Media job not found"}, 404)
+                return
+            self._send_json({"success": True, "ok": True, "job": job})
+            return
+
+        self._send_json({"success": False, "ok": False, "error": "Media endpoint not found"}, 404)
+
+    def handle_media_post(self, path, body):
+        """Create media jobs and scan local asset folders."""
+        if path == '/media/assets/scan':
+            if not isinstance(body, dict):
+                self._send_json({"success": False, "ok": False, "error": "Invalid asset scan payload"}, 400)
+                return
+            try:
+                assets = scan_asset_directory(
+                    body.get('directory'),
+                    recursive=bool(body.get('recursive', True)),
+                    generate_thumbnails=bool(body.get('generateThumbnails', False)),
+                )
+                self._send_json({"success": True, "ok": True, "assets": assets})
+            except Exception as exc:
+                self._send_json({"success": False, "ok": False, "error": str(exc)}, 400)
+            return
+
+        if path == '/media/jobs':
+            if not isinstance(body, dict):
+                self._send_json({"success": False, "ok": False, "error": "Invalid media job payload"}, 400)
+                return
+            job = create_media_job(body.get("type"), body.get("payload") or {})
+            self._send_json({"success": True, "ok": True, "job": job}, 202)
+            return
+        self._send_json({"success": False, "ok": False, "error": "Media endpoint not found"}, 404)
+
     # --- Router ---
 
     def do_OPTIONS(self):
@@ -1028,6 +1333,10 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
 
         if path.startswith('/mcp/'):
             self.handle_mcp_get(path)
+            return
+
+        if path.startswith('/media/'):
+            self.handle_media_get(path)
             return
 
         # 1. ComfyUI 路由
@@ -1114,6 +1423,14 @@ class TapnowFullHandler(BaseHTTPRequestHandler):
                 self._send_json({"success": False, "ok": False, "tool": None, "error": "Invalid JSON"}, 400)
                 return
             self.handle_mcp_call(body)
+            return
+
+        if path.startswith('/media/'):
+            body = self._read_json_body()
+            if body is None:
+                self._send_json({"success": False, "ok": False, "error": "Invalid JSON"}, 400)
+                return
+            self.handle_media_post(path, body)
             return
 
         # 1. ComfyUI 路由

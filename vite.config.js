@@ -3,12 +3,17 @@ import react from '@vitejs/plugin-react'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 
 // https://vitejs.dev/config/
-export default defineConfig({
-  plugins: [react(), viteSingleFile()],
-  build: {
-    emptyOutDir: false,
-    minify: true,
-    cssCodeSplit: false, // Ensure CSS is inlined
-    assetsInlineLimit: 100000000, // Large limit to ensure assets are inlined
+export default defineConfig(({ mode }) => {
+  const isDesktop = mode === 'desktop'
+
+  return {
+    plugins: isDesktop ? [react()] : [react(), viteSingleFile()],
+    base: isDesktop ? './' : '/',
+    build: {
+      emptyOutDir: false,
+      minify: true,
+      cssCodeSplit: isDesktop, // Desktop builds can keep normal static assets.
+      assetsInlineLimit: isDesktop ? 4096 : 100000000, // Web portable builds remain single-file.
+    }
   }
 })
