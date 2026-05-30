@@ -169,6 +169,24 @@
 .markdown-body {
     line-height: 1.5;
 }
+.markdown-body,
+.markdown-body p,
+.markdown-body li,
+.markdown-body pre,
+.markdown-body code,
+.markdown-body table,
+.markdown-body th,
+.markdown-body td {
+    user-select: text;
+    cursor: text;
+}
+.markdown-body button,
+.markdown-body input,
+.markdown-body textarea,
+.markdown-body select,
+.markdown-body [role="button"] {
+    cursor: auto;
+}
 .markdown-body p {
     margin: 0;
 }
@@ -187,4 +205,8 @@
 }
 .markdown-body code {
     font-size: 0.875em;
+}
+.markdown-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
 }

@@ -174,6 +174,28 @@ import {
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
 const t = i18n.t.bind(i18n);
 
+const MARKDOWN_HTML_CACHE_LIMIT = 120;
+const markdownHtmlCache = new Map();
+
+const renderMarkdownHtml = (content) => {
+  const raw = String(content || "");
+  if (!raw) return "";
+  const cached = markdownHtmlCache.get(raw);
+  if (cached) return cached;
+
+  const sanitized = DOMPurify.sanitize(marked.parse(raw));
+  const html = sanitized
+    .replace(/<table/g, '<div class="markdown-table-scroll"><table')
+    .replace(/<\/table>/g, "</table></div>");
+
+  markdownHtmlCache.set(raw, html);
+  if (markdownHtmlCache.size > MARKDOWN_HTML_CACHE_LIMIT) {
+    const firstKey = markdownHtmlCache.keys().next().value;
+    markdownHtmlCache.delete(firstKey);
+  }
+  return html;
+};
+
 // --- MaskVisualFeedback 组件：蒙版视觉反馈层 ---
 const MaskVisualFeedback = ({ canvasRef, isDrawing }) => {
   const [maskUrl, setMaskUrl] = useState("");
@@ -2328,30 +2350,55 @@ const styles = `
         }
 
         /* Markdown Styles for Chat */
-        .markdown-body { font-size: 13px; line-height: 1.5; color: #e4e4e7; word-wrap: break-word; user-select: text !important; cursor: text; }
-        .markdown-body * { user-select: text !important; cursor: text; }
-        .markdown-body pre { background: #27272a; padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; user-select: text !important; cursor: text; }
-        .markdown-body code { font-family: monospace; background: #3f3f46; padding: 2px 4px; border-radius: 4px; font-size: 12px; user-select: text !important; cursor: text; }
-        .markdown-body pre code { background: transparent; padding: 0; color: #a1a1aa; user-select: text !important; cursor: text; }
-        .markdown-body p { margin-bottom: 8px; user-select: text !important; cursor: text; }
-        .markdown-body ul, .markdown-body ol { margin-left: 20px; margin-bottom: 8px; list-style: disc; user-select: text !important; cursor: text; }
-        .markdown-body li { user-select: text !important; cursor: text; }
+        .markdown-body {
+            --markdown-table-border: #3f3f46;
+            --markdown-table-header-bg: #3f3f46;
+            --markdown-table-even-bg: #27272a;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #e4e4e7;
+            word-wrap: break-word;
+            user-select: text !important;
+            cursor: text;
+        }
+        .markdown-body p,
+        .markdown-body li,
+        .markdown-body pre,
+        .markdown-body code,
+        .markdown-body table,
+        .markdown-body th,
+        .markdown-body td { user-select: text !important; cursor: text; }
+        .markdown-body button,
+        .markdown-body input,
+        .markdown-body textarea,
+        .markdown-body select,
+        .markdown-body [role="button"] { cursor: auto; }
+        .markdown-body pre { background: #27272a; padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; white-space: pre-wrap; word-wrap: break-word; }
+        .markdown-body code { font-family: monospace; background: #3f3f46; padding: 2px 4px; border-radius: 4px; font-size: 12px; }
+        .markdown-body pre code { background: transparent; padding: 0; color: #a1a1aa; }
+        .markdown-body p { margin-bottom: 8px; }
+        .markdown-body ul, .markdown-body ol { margin-left: 20px; margin-bottom: 8px; list-style: disc; }
         .markdown-body video { max-width: 100%; border-radius: 0.5rem; margin-top: 0.5rem; }
-        .markdown-body table { border-collapse: collapse; width: 100%; margin: 12px 0; }
-        .markdown-body table th, .markdown-body table td { border: 1px solid #3f3f46; padding: 8px 12px; text-align: left; }
-        .markdown-body table th { background-color: #3f3f46; font-weight: 600; }
-        .markdown-body table tr:nth-child(even) { background-color: #27272a; }
-        .theme-light .markdown-body table th, .theme-light .markdown-body table td { border-color: #d4d4d8; }
-        .theme-light .markdown-body table th { background-color: #e4e4e7; }
-        .theme-light .markdown-body table tr:nth-child(even) { background-color: #f4f4f5; }
-        .theme-light .markdown-body { color: #18181b; }
+        .markdown-table-scroll { max-width: 100%; overflow-x: auto; margin: 12px 0; }
+        .markdown-body table { border-collapse: collapse; width: 100%; min-width: max-content; margin: 0; }
+        .markdown-body table th, .markdown-body table td { border: 1px solid var(--markdown-table-border); padding: 8px 12px; text-align: left; }
+        .markdown-body table th { background-color: var(--markdown-table-header-bg); font-weight: 600; }
+        .markdown-body table tr:nth-child(even) { background-color: var(--markdown-table-even-bg); }
+        .theme-light .markdown-body {
+            --markdown-table-border: #d4d4d8;
+            --markdown-table-header-bg: #e4e4e7;
+            --markdown-table-even-bg: #f4f4f5;
+            color: #18181b;
+        }
         .theme-light .markdown-body pre { background: #f4f4f5; color: #18181b; }
         .theme-light .markdown-body code { background: #e4e4e7; color: #18181b; }
         .theme-light .markdown-body pre code { color: #18181b; }
-        .theme-solarized .markdown-body table th, .theme-solarized .markdown-body table td { border-color: #d7cfb2; }
-        .theme-solarized .markdown-body table th { background-color: #ddddc1; }
-        .theme-solarized .markdown-body table tr:nth-child(even) { background-color: #eee8d5; }
-        .theme-solarized .markdown-body { color: #586e75; }
+        .theme-solarized .markdown-body {
+            --markdown-table-border: #d7cfb2;
+            --markdown-table-header-bg: #ddddc1;
+            --markdown-table-even-bg: #eee8d5;
+            color: #586e75;
+        }
         .theme-solarized .markdown-body pre { background: #ddddc1; color: #586e75; }
         .theme-solarized .markdown-body code { background: #ddddc1; color: #586e75; }
         .theme-solarized .markdown-body pre code { color: #586e75; }
@@ -3141,6 +3188,13 @@ const getAntigravityImageSizeByResolution = (value) => {
   if (normalized === "4K" || normalized === "2K" || normalized === "1K")
     return normalized;
   return "";
+};
+const getJimengImageResolutionPayloadValue = (value, fallback = "2k") => {
+  const normalized = normalizeImageResolution(value);
+  if (normalized === "1K") return "1k";
+  if (normalized === "2K") return "2k";
+  if (normalized === "4K") return "4k";
+  return fallback;
 };
 const getAntigravitySizeParam = (ratio, sizeStr) => {
   const normalizedRatio = String(ratio || "").trim();
@@ -6439,6 +6493,23 @@ function TapnowApp() {
   const [batchGroups, setBatchGroups] = useState([]); // Batch group metadata
   const batchTaskCounterRef = useRef(new Map()); // nodeId -> taskIndex
   const shotBatchMapRef = useRef(new Map()); // key: nodeId:shotId -> { batchId, batchOrder, taskIndex }
+  const generateSingleImageRef = useRef(null);
+  const generateSingleShotRef = useRef(null);
+  const executeTapnowToolRef = useRef(null);
+  const runGenerateSingleImage = useCallback((...args) => {
+    if (!generateSingleImageRef.current) return;
+    return generateSingleImageRef.current(...args);
+  }, []);
+  const runGenerateSingleShot = useCallback((...args) => {
+    if (!generateSingleShotRef.current) return;
+    return generateSingleShotRef.current(...args);
+  }, []);
+  const runExecuteTapnowTool = useCallback(async (...args) => {
+    if (!executeTapnowToolRef.current) {
+      throw new Error("Tapnow tool executor is not ready");
+    }
+    return executeTapnowToolRef.current(...args);
+  }, []);
   const [batchQueueMode, setBatchQueueMode] = useState(() => {
     try {
       return localStorage.getItem("tapnow_batch_queue_mode") || "parallel";
@@ -6608,14 +6679,14 @@ function TapnowApp() {
 
         if (currentShot) {
           if (item.mode === "image") {
-            generateSingleImage(item.nodeId, currentShot);
+            runGenerateSingleImage(item.nodeId, currentShot);
           } else {
-            generateSingleShot(item.nodeId, currentShot);
+            runGenerateSingleShot(item.nodeId, currentShot);
           }
         }
       });
     }
-  }, [batchQueue, nodes, batchConcurrency, batchTick]);
+  }, [batchQueue, nodes, batchConcurrency, batchTick, runGenerateSingleImage, runGenerateSingleShot]);
 
   // V3.7.27: 周期性触发队列检查，防止因状态更新遗漏导致的阻塞
   useEffect(() => {
@@ -13097,10 +13168,17 @@ function TapnowApp() {
           return;
         }
 
-        if (
-          sourceNode.type === "input-image" ||
-          sourceNode.type === "preview"
-        ) {
+        if (sourceNode.type === "input-image") {
+          if (sourceNode.content)
+            pushItem(
+              sourceNode.content,
+              isVideoUrl(sourceNode.content) ? "video" : "image",
+              { name: sourceNode.title || "", originalUrl: sourceNode.content }
+            );
+          return;
+        }
+
+        if (sourceNode.type === "preview") {
           if (sourceNode.content)
             pushItem(
               sourceNode.content,
@@ -14867,6 +14945,8 @@ function TapnowApp() {
               selectedKeyframes: sourceNode.content
                 ? [{ time: 0, url: sourceNode.content }]
                 : [],
+              previewMjImages: [],
+              previewFilename: "",
               isImageInput: true,
             };
             cache.set(conn.to, virtualVideoInput);
@@ -16915,7 +16995,7 @@ function TapnowApp() {
                 continue;
               }
             }
-            const result = await executeTapnowTool(
+            const result = await runExecuteTapnowTool(
               toolCall.name,
               toolCall.arguments
             );
@@ -22494,7 +22574,7 @@ function TapnowApp() {
           const imageConfig = {};
           if (aspect) imageConfig.aspectRatio = aspect;
           if (resolution && resolution !== "Auto")
-            imageConfig.imageSize = resolution;
+            imageConfig.imageSize = normalizeImageResolution(resolution);
 
           payload = {
             contents: [{ role: "user", parts }],
@@ -22570,6 +22650,7 @@ function TapnowApp() {
               size: antigravitySize,
               response_format: "url",
             };
+            if (antigravityImageSize) payload.image_size = antigravityImageSize;
             if (antigravityQuality) payload.quality = antigravityQuality;
           }
         }
@@ -22919,7 +23000,10 @@ function TapnowApp() {
               throw new Error("图生图功能需要提供提示词");
 
             let jimengRatio = ratio;
-            let jimengResolution = "2k";
+            let jimengResolution = getJimengImageResolutionPayloadValue(
+              resolution,
+              "2k"
+            );
 
             if (ratio === "Auto" && sourceImage) {
               try {
@@ -22961,9 +23045,10 @@ function TapnowApp() {
             }
 
             if (resolution !== "Auto") {
-              if (resolution === "1K") jimengResolution = "1k";
-              else if (resolution === "2K") jimengResolution = "2k";
-              else if (resolution === "4K") jimengResolution = "4k";
+              jimengResolution = getJimengImageResolutionPayloadValue(
+                resolution,
+                jimengResolution
+              );
             }
 
             const maskDataUrl = finalMaskBlob
@@ -23002,10 +23087,10 @@ function TapnowApp() {
             // 文生图 (使用 generations)
             endpoint = `${baseUrl}/v1/images/generations`;
             const jimengRatio = ratio === "Auto" ? "1:1" : ratio;
-            let jimengResolution = "2k";
-            if (resolution === "1K") jimengResolution = "1k";
-            else if (resolution === "2K") jimengResolution = "2k";
-            else if (resolution === "4K") jimengResolution = "4k";
+            const jimengResolution = getJimengImageResolutionPayloadValue(
+              resolution,
+              "2k"
+            );
 
             if (!prompt || prompt.trim() === "")
               throw new Error("提示词不能为空");
@@ -27796,69 +27881,6 @@ function TapnowApp() {
     return newNode;
   };
 
-  const executeTapnowTool = useCallback(
-    async (toolName, rawArgs = {}) => {
-      const executor = createTapnowToolExecutor({
-        apiConfigs,
-        history,
-        nodes,
-        connections,
-        selectedNodeId,
-        selectedNodeIds,
-        view: viewRef.current,
-        batchQueue,
-        resolveApiConfig,
-        resolveHistoryUrl,
-        addNode,
-        setChatFiles,
-        setIsChatOpen,
-        viewportWidth: typeof window !== "undefined" ? window.innerWidth : 0,
-        viewportHeight: typeof window !== "undefined" ? window.innerHeight : 0,
-        lastUsedImageModel,
-        lastUsedVideoModel,
-        resolveModelKey,
-        isImageModelType,
-        startGeneration,
-        nodesMap,
-        storyboardLlmSplitModes: STORYBOARD_LLM_SPLIT_MODES,
-        runStoryboardLlmSplit,
-        runStoryboardTablePromptMerge,
-        updateNodeSettings,
-        isSameShotId,
-        normalizeStoryboardMode,
-        generateSingleImage,
-        generateSingleShot,
-        updateShot,
-      });
-      return executor(toolName, rawArgs);
-    },
-    [
-      addNode,
-      apiConfigs,
-      batchQueue,
-      connections,
-      generateSingleImage,
-      generateSingleShot,
-      history,
-      isSameShotId,
-      nodesMap,
-      nodes,
-      lastUsedImageModel,
-      lastUsedVideoModel,
-      normalizeStoryboardMode,
-      resolveApiConfig,
-      resolveHistoryUrl,
-      resolveModelKey,
-      runStoryboardLlmSplit,
-      runStoryboardTablePromptMerge,
-      selectedNodeId,
-      selectedNodeIds,
-      startGeneration,
-      updateNodeSettings,
-      updateShot,
-    ]
-  );
-
   // V2.6.1: 角色/场景提示词生成与自动流程
   const normalizeCharacterAge = (ageValue) => {
     if (!ageValue) return "";
@@ -29774,6 +29796,71 @@ function TapnowApp() {
       }, 50);
     }
   };
+
+  const executeTapnowTool = useCallback(
+    async (toolName, rawArgs = {}) => {
+      const executor = createTapnowToolExecutor({
+        apiConfigs,
+        history,
+        nodes,
+        connections,
+        selectedNodeId,
+        selectedNodeIds,
+        view: viewRef.current,
+        batchQueue,
+        resolveApiConfig,
+        resolveHistoryUrl,
+        addNode,
+        setChatFiles,
+        setIsChatOpen,
+        viewportWidth: typeof window !== "undefined" ? window.innerWidth : 0,
+        viewportHeight: typeof window !== "undefined" ? window.innerHeight : 0,
+        lastUsedImageModel,
+        lastUsedVideoModel,
+        resolveModelKey,
+        isImageModelType,
+        startGeneration,
+        nodesMap,
+        storyboardLlmSplitModes: STORYBOARD_LLM_SPLIT_MODES,
+        runStoryboardLlmSplit,
+        runStoryboardTablePromptMerge,
+        updateNodeSettings,
+        isSameShotId,
+        normalizeStoryboardMode,
+        generateSingleImage: runGenerateSingleImage,
+        generateSingleShot: runGenerateSingleShot,
+        updateShot,
+      });
+      return executor(toolName, rawArgs);
+    },
+    [
+      addNode,
+      apiConfigs,
+      batchQueue,
+      connections,
+      history,
+      isSameShotId,
+      nodesMap,
+      nodes,
+      lastUsedImageModel,
+      lastUsedVideoModel,
+      normalizeStoryboardMode,
+      resolveApiConfig,
+      resolveHistoryUrl,
+      resolveModelKey,
+      runGenerateSingleImage,
+      runGenerateSingleShot,
+      runStoryboardLlmSplit,
+      runStoryboardTablePromptMerge,
+      selectedNodeId,
+      selectedNodeIds,
+      startGeneration,
+      updateNodeSettings,
+      updateShot,
+    ]
+  );
+  executeTapnowToolRef.current = executeTapnowTool;
+
   const focusStoryboardShotCard = useCallback((nodeId, shotId) => {
     const selector = `[data-storyboard-shot-key="${makeStoryboardShotFocusKey(
       nodeId,
@@ -30661,6 +30748,7 @@ function TapnowApp() {
       );
     });
   };
+  generateSingleShotRef.current = generateSingleShot;
 
   // V3.6.1: 智能分镜图片生成函数
   const generateSingleImage = (nodeId, shot) => {
@@ -40401,6 +40489,26 @@ ${inputText.substring(0, 15000)} ... (截断)
                 const storyboardViewMode = normalizeStoryboardViewMode(
                   node.settings?.viewMode
                 );
+                const storyboardShots = Array.isArray(node.settings?.shots)
+                  ? node.settings.shots
+                  : [];
+                const storyboardStatusCounts = storyboardShots.reduce(
+                  (acc, shot) => {
+                    const status = String(shot?.status || "draft").toLowerCase();
+                    if (status === "generating" || status === "queued") {
+                      acc.running += 1;
+                    } else if (status === "done" || status === "completed") {
+                      acc.done += 1;
+                    } else if (status === "failed" || status === "error") {
+                      acc.failed += 1;
+                    } else {
+                      acc.draft += 1;
+                    }
+                    if (shot?.outputEnabled) acc.selected += 1;
+                    return acc;
+                  },
+                  { running: 0, done: 0, failed: 0, draft: 0, selected: 0 }
+                );
                 const storyboardSegmentTrackClass =
                   theme === "dark"
                     ? "bg-zinc-800 border border-zinc-700/80"
@@ -40549,6 +40657,34 @@ ${inputText.substring(0, 15000)} ... (截断)
                           >
                             <Pencil size={12} />
                           </button>
+                          <div
+                            className={`ml-2 flex items-center gap-1 text-[10px] whitespace-nowrap ${
+                              theme === "dark" ? "text-zinc-400" : "text-zinc-500"
+                            }`}
+                            title={t("镜头状态")}
+                          >
+                            <span>{t("镜头")}: {storyboardShots.length}</span>
+                            {storyboardStatusCounts.running > 0 && (
+                              <span className="text-blue-400">
+                                {t("生成中")} {storyboardStatusCounts.running}
+                              </span>
+                            )}
+                            {storyboardStatusCounts.failed > 0 && (
+                              <span className="text-red-400">
+                                {t("失败")} {storyboardStatusCounts.failed}
+                              </span>
+                            )}
+                            {storyboardStatusCounts.done > 0 && (
+                              <span className="text-emerald-400">
+                                {t("完成")} {storyboardStatusCounts.done}
+                              </span>
+                            )}
+                            {storyboardStatusCounts.selected > 0 && (
+                              <span className="text-purple-400">
+                                {t("已选输出")} {storyboardStatusCounts.selected}
+                              </span>
+                            )}
+                          </div>
                           {/* V3.6.1: 图片/视频模式切换滑块 */}
                           <div
                             className={`flex items-center ml-2 p-0.5 rounded-full ${storyboardSegmentTrackClass}`}
@@ -43418,9 +43554,10 @@ ${inputText.substring(0, 15000)} ... (截断)
                                                                 f.name,
                                                               referenceImages:
                                                                 [],
-                                                            }
-                                                          );
-                                                        };
+      }
+    );
+  };
+  generateSingleImageRef.current = generateSingleImage;
                                                         r.readAsDataURL(f);
                                                       }
                                                     }}
@@ -51239,9 +51376,7 @@ ${inputText.substring(0, 15000)} ... (截断)
                             <div
                               className="markdown-body"
                               dangerouslySetInnerHTML={{
-                                __html: DOMPurify.sanitize(
-                                  marked.parse(msg.content)
-                                ),
+                                __html: renderMarkdownHtml(msg.content),
                               }}
                               style={{ userSelect: "text", cursor: "text" }}
                             ></div>
