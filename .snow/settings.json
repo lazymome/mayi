@@ -4,5 +4,6 @@
   "vulnerabilityHuntingMode": false,
   "toolSearchEnabled": false,
   "hybridCompressEnabled": false,
-  "teamMode": false
+  "teamMode": false,
+  "ultraTodoEnabled": false
 }

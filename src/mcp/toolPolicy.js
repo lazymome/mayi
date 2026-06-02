@@ -1,4 +1,4 @@
-import { TAPNOW_CORE_TOOLS, TOOL_RISK } from "./toolRegistry";
+import { TAPNOW_CORE_TOOLS, TOOL_RISK } from "./toolRegistry.js";
 
 const TOOL_BY_NAME = new Map(TAPNOW_CORE_TOOLS.map((tool) => [tool.name, tool]));
 

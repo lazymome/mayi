@@ -3,7 +3,7 @@ import {
   normalizeToolArray,
   normalizeToolNumber,
   normalizeToolString,
-} from "./appActions";
+} from "./appActions.js";
 
 const getViewportFallback = (value, fallback) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;

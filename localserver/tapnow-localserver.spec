@@ -2,7 +2,8 @@
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+SPEC_DIR = Path(globals().get('SPECPATH', '.')).resolve()
+ROOT = SPEC_DIR.parent
 SERVER = ROOT / 'localserver' / 'tapnow-server-full.py'
 
 

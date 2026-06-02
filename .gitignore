@@ -1,5 +1,9 @@
 node_modules/
 dist/
+dist-sidecar/
+release/
+*.blockmap
+latest*.yml
 .github/workflows/release-gates.yml
 # Keep generated/internal docs ignored by default, but allow curated specs.
 docs/*

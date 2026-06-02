@@ -489,7 +489,9 @@ const getDefaultPanoramaCamera = () => ({
 const normalizePanoramaCamera = (camera = {}) => {
   const defaults = getDefaultPanoramaCamera();
   const next = { ...defaults, ...(camera || {}) };
-  next.yaw = Number.isFinite(Number(next.yaw)) ? Number(next.yaw) : defaults.yaw;
+  next.yaw = Number.isFinite(Number(next.yaw))
+    ? Number(next.yaw)
+    : defaults.yaw;
   next.pitch = Number.isFinite(Number(next.pitch))
     ? Math.max(-85, Math.min(85, Number(next.pitch)))
     : defaults.pitch;
@@ -543,22 +545,24 @@ const createPanoramaBackground = (url, name = "") => ({
   createdAt: Date.now(),
 });
 
-const getShotPanoramaStage = (shot = {}) => ({
-  backgroundId: "",
-  backgroundUrl: "",
-  captureUrl: "",
-  captureUpdatedAt: null,
-  camera: getDefaultPanoramaCamera(),
-  redraw: { status: "idle", outputImages: [], outputUrl: "" },
-  ...(shot.stage || {}),
-  camera: normalizePanoramaCamera(shot.stage?.camera || shot.cameraParams),
-  redraw: {
-    status: "idle",
-    outputImages: [],
-    outputUrl: "",
-    ...(shot.stage?.redraw || {}),
-  },
-});
+const getShotPanoramaStage = (shot = {}) => {
+  const stage = shot.stage || {};
+
+  return {
+    backgroundId: "",
+    backgroundUrl: "",
+    captureUrl: "",
+    captureUpdatedAt: null,
+    ...stage,
+    camera: normalizePanoramaCamera(stage.camera || shot.cameraParams),
+    redraw: {
+      status: "idle",
+      outputImages: [],
+      outputUrl: "",
+      ...(stage.redraw || {}),
+    },
+  };
+};
 
 const getPanoramaPreviewStyle = (imageUrl, camera = {}) => {
   const normalized = normalizePanoramaCamera(camera);
@@ -592,12 +596,16 @@ const renderEquirectangularFrame = async (imageUrl, camera = {}) => {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("无法创建截图画布");
 
-  const yawCenter = ((((normalized.yaw % 360) + 360) % 360) / 360) * image.width;
+  const yawCenter =
+    ((((normalized.yaw % 360) + 360) % 360) / 360) * image.width;
   const pitchCenter = ((90 - normalized.pitch) / 180) * image.height;
   const cropW = Math.max(1, (normalized.fov / 360) * image.width);
   const cropH = Math.max(1, (normalized.fov / 180) * image.height);
   const sx = yawCenter - cropW / 2;
-  const sy = Math.max(0, Math.min(image.height - cropH, pitchCenter - cropH / 2));
+  const sy = Math.max(
+    0,
+    Math.min(image.height - cropH, pitchCenter - cropH / 2)
+  );
 
   const drawPart = (sourceX, sourceW, destX, destW) => {
     ctx.drawImage(image, sourceX, sy, sourceW, cropH, destX, 0, destW, height);
@@ -6635,7 +6643,14 @@ function TapnowApp() {
         }
       });
     }
-  }, [batchQueue, nodes, batchConcurrency, batchTick, runGenerateSingleImage, runGenerateSingleShot]);
+  }, [
+    batchQueue,
+    nodes,
+    batchConcurrency,
+    batchTick,
+    runGenerateSingleImage,
+    runGenerateSingleShot,
+  ]);
 
   // V3.7.27: 周期性触发队列检查，防止因状态更新遗漏导致的阻塞
   useEffect(() => {
@@ -12132,7 +12147,8 @@ function TapnowApp() {
       const routeInfo = resolveModelRoute({
         config,
         providers,
-        strategy: config.route?.strategy || providers[config.provider]?.routeStrategy,
+        strategy:
+          config.route?.strategy || providers[config.provider]?.routeStrategy,
       });
       const providerKey = routeInfo?.channelId || config.provider;
       // V3.4.19: 只从 Provider 获取凭据，不再使用 model 级别的 key/url
@@ -15534,9 +15550,7 @@ function TapnowApp() {
         "routeStrategy",
         "limitPolicy",
         "pricing",
-      ].some(
-        (field) => field in updates
-      )
+      ].some((field) => field in updates)
     ) {
       clearApiStatusForProvider(providerKey);
     }
@@ -30477,7 +30491,9 @@ function TapnowApp() {
       stage: {
         ...currentStage,
         ...stagePatch,
-        camera: normalizePanoramaCamera(stagePatch.camera || currentStage.camera),
+        camera: normalizePanoramaCamera(
+          stagePatch.camera || currentStage.camera
+        ),
         redraw: {
           ...(currentStage.redraw || {}),
           ...(stagePatch.redraw || {}),
@@ -40443,7 +40459,9 @@ ${inputText.substring(0, 15000)} ... (截断)
                   : [];
                 const storyboardStatusCounts = storyboardShots.reduce(
                   (acc, shot) => {
-                    const status = String(shot?.status || "draft").toLowerCase();
+                    const status = String(
+                      shot?.status || "draft"
+                    ).toLowerCase();
                     if (status === "generating" || status === "queued") {
                       acc.running += 1;
                     } else if (status === "done" || status === "completed") {
@@ -40608,11 +40626,15 @@ ${inputText.substring(0, 15000)} ... (截断)
                           </button>
                           <div
                             className={`ml-2 flex items-center gap-1 text-[10px] whitespace-nowrap ${
-                              theme === "dark" ? "text-zinc-400" : "text-zinc-500"
+                              theme === "dark"
+                                ? "text-zinc-400"
+                                : "text-zinc-500"
                             }`}
                             title={t("镜头状态")}
                           >
-                            <span>{t("镜头")}: {storyboardShots.length}</span>
+                            <span>
+                              {t("镜头")}: {storyboardShots.length}
+                            </span>
                             {storyboardStatusCounts.running > 0 && (
                               <span className="text-blue-400">
                                 {t("生成中")} {storyboardStatusCounts.running}
@@ -40630,7 +40652,8 @@ ${inputText.substring(0, 15000)} ... (截断)
                             )}
                             {storyboardStatusCounts.selected > 0 && (
                               <span className="text-purple-400">
-                                {t("已选输出")} {storyboardStatusCounts.selected}
+                                {t("已选输出")}{" "}
+                                {storyboardStatusCounts.selected}
                               </span>
                             )}
                           </div>
@@ -43503,10 +43526,11 @@ ${inputText.substring(0, 15000)} ... (截断)
                                                                 f.name,
                                                               referenceImages:
                                                                 [],
-      }
-    );
-  };
-  generateSingleImageRef.current = generateSingleImage;
+                                                            }
+                                                          );
+                                                        };
+                                                        generateSingleImageRef.current =
+                                                          generateSingleImage;
                                                         r.readAsDataURL(f);
                                                       }
                                                     }}
@@ -44390,7 +44414,8 @@ ${inputText.substring(0, 15000)} ... (截断)
                                       })()}
 
                                       {(() => {
-                                        const stage = getShotPanoramaStage(shot);
+                                        const stage =
+                                          getShotPanoramaStage(shot);
                                         const camera = normalizePanoramaCamera(
                                           stage.camera
                                         );
@@ -44432,9 +44457,7 @@ ${inputText.substring(0, 15000)} ... (截断)
                                             onMouseDown={(e) =>
                                               e.stopPropagation()
                                             }
-                                            onClick={(e) =>
-                                              e.stopPropagation()
-                                            }
+                                            onClick={(e) => e.stopPropagation()}
                                           >
                                             <div className="flex items-center justify-between gap-2">
                                               <div className="flex items-center gap-1 text-[10px] font-semibold opacity-80">
@@ -44443,7 +44466,9 @@ ${inputText.substring(0, 15000)} ... (截断)
                                               </div>
                                               <div className="flex items-center gap-1">
                                                 <select
-                                                  value={stage.backgroundId || ""}
+                                                  value={
+                                                    stage.backgroundId || ""
+                                                  }
                                                   onChange={(e) => {
                                                     const picked =
                                                       backgrounds.find(
@@ -44537,9 +44562,9 @@ ${inputText.substring(0, 15000)} ... (截断)
                                                   }}
                                                   imageUrl={backgroundUrl}
                                                   camera={camera}
-                                                  onCameraChange={(nextCamera) =>
-                                                    updateCamera(nextCamera)
-                                                  }
+                                                  onCameraChange={(
+                                                    nextCamera
+                                                  ) => updateCamera(nextCamera)}
                                                   label="Three.js"
                                                 />
                                               </div>
@@ -44632,12 +44657,10 @@ ${inputText.substring(0, 15000)} ... (截断)
                                                         key={focal}
                                                         onClick={() =>
                                                           updateCamera({
-                                                            focalLength:
-                                                              focal,
-                                                            fov:
-                                                              focalLengthToFov(
-                                                                focal
-                                                              ),
+                                                            focalLength: focal,
+                                                            fov: focalLengthToFov(
+                                                              focal
+                                                            ),
                                                           })
                                                         }
                                                         className={`text-[10px] px-1.5 py-0.5 rounded border ${
