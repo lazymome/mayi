@@ -4,7 +4,54 @@
 @tailwind utilities;
 
 
-        body { margin: 0; padding: 0; background-color: #09090b; }
+        :root {
+            --tapnow-bg: 9 9 11;
+            --tapnow-fg: 244 244 245;
+            --tapnow-surface: 24 24 27;
+            --tapnow-surface-muted: 39 39 42;
+            --tapnow-border: 39 39 42;
+            --tapnow-muted: 161 161 170;
+            --tapnow-accent: 37 99 235;
+            --tapnow-accent-fg: 255 255 255;
+        }
+
+        html {
+            color-scheme: dark;
+            background-color: rgb(var(--tapnow-bg));
+        }
+
+        body { margin: 0; padding: 0; background-color: rgb(var(--tapnow-bg)); color: rgb(var(--tapnow-fg)); }
+
+        @layer components {
+            .page-shell {
+                @apply min-h-screen bg-zinc-950 text-zinc-100 p-6;
+            }
+
+            .page-container {
+                @apply mx-auto max-w-7xl space-y-6;
+            }
+
+            .section-card {
+                @apply rounded-2xl border border-zinc-800 bg-zinc-900/70 p-5;
+            }
+
+            .button-focus {
+                @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950;
+            }
+
+            .button-primary {
+                @apply button-focus rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60;
+            }
+
+            .button-secondary {
+                @apply button-focus rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-200 transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60;
+            }
+
+            .input-base {
+                @apply rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500;
+            }
+        }
+
         /* Prevent selection during drag - applied to canvas only mostly */
         .select-none { user-select: none; }
         /* Allow selection in chat */

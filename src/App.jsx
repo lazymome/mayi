@@ -119,6 +119,8 @@ import {
   buildModelListRequest,
   normalizeProtocolType,
 } from "./api/protocols";
+import MaskVisualFeedback from "./features/canvas/components/MaskVisualFeedback";
+import ArtisticProgress from "./features/canvas/components/ArtisticProgress";
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
 const t = i18n.t.bind(i18n);
@@ -143,64 +145,6 @@ const renderMarkdownHtml = (content) => {
     markdownHtmlCache.delete(firstKey);
   }
   return html;
-};
-
-// --- MaskVisualFeedback 组件：蒙版视觉反馈层 ---
-const MaskVisualFeedback = ({ canvasRef, isDrawing }) => {
-  const [maskUrl, setMaskUrl] = useState("");
-  const objectUrlRef = useRef("");
-
-  const updateMask = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    if (typeof canvas.toBlob === "function") {
-      canvas.toBlob((blob) => {
-        if (!blob) return;
-        if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-        const nextUrl = URL.createObjectURL(blob);
-        objectUrlRef.current = nextUrl;
-        setMaskUrl(nextUrl);
-      }, "image/png");
-      return;
-    }
-    setMaskUrl(canvas.toDataURL());
-  }, [canvasRef]);
-
-  useEffect(
-    () => () => {
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-    },
-    []
-  );
-
-  // 初始更新
-  useEffect(() => {
-    if (!canvasRef.current) return;
-    updateMask();
-  }, [canvasRef, updateMask]);
-
-  // 避免绘制中逐帧序列化 canvas；结束时再异步刷新遮罩预览。
-  useEffect(() => {
-    if (!isDrawing) updateMask();
-  }, [isDrawing, updateMask]);
-
-  if (!maskUrl) return null;
-
-  return (
-    <div
-      className="absolute inset-0 pointer-events-none"
-      style={{
-        background: "rgba(255, 0, 0, 0.3)",
-        mixBlendMode: "multiply",
-        WebkitMaskImage: `url(${maskUrl})`,
-        maskImage: `url(${maskUrl})`,
-        WebkitMaskSize: "100% 100%",
-        maskSize: "100% 100%",
-        WebkitMaskRepeat: "no-repeat",
-        maskRepeat: "no-repeat",
-      }}
-    />
-  );
 };
 
 // --- V3.5.16: LocalImageManager - IndexedDB-based image storage ---
@@ -1107,44 +1051,6 @@ const TagListEditor = ({
         >
           {addLabel}
         </button>
-      </div>
-    </div>
-  );
-};
-
-// --- 极简艺术进度条组件 (Centered & Artistic) ---
-const ArtisticProgress = ({ visible, progress, status, type }) => {
-  if (!visible) return null;
-
-  return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-300 pointer-events-none select-none">
-      <div className="relative bg-[#09090b]/90 border border-white/10 rounded-2xl p-8 shadow-2xl flex flex-col items-center min-w-[300px] backdrop-blur-xl">
-        {/* 装饰性光晕 */}
-        <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-20 h-20 bg-blue-500/20 blur-[50px] rounded-full pointer-events-none" />
-
-        {/* 标题与百分比 */}
-        <div className="flex flex-col items-center gap-1 mb-6 z-10">
-          <span className="font-mono text-[10px] tracking-[0.3em] uppercase text-zinc-500">
-            {type === "import" ? "DATA INGESTION" : "SYSTEM ARCHIVING"}
-          </span>
-          <div className="text-4xl font-bold text-zinc-200 tracking-tighter font-sans">
-            {progress.toFixed(0)}
-            <span className="text-sm text-zinc-500 ml-1">%</span>
-          </div>
-        </div>
-
-        {/* 进度条轨道 */}
-        <div className="relative w-full h-[2px] bg-zinc-800 rounded-full overflow-hidden mb-4">
-          <div
-            className="absolute top-0 left-0 h-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)] transition-all duration-100 ease-linear"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
-        {/* 状态文本 */}
-        <span className="text-[10px] font-mono text-zinc-400 tracking-widest uppercase animate-pulse">
-          {status}
-        </span>
       </div>
     </div>
   );

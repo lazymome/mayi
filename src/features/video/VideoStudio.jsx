@@ -41,6 +41,11 @@ export default function VideoStudio() {
   }
 
   const deleteScene = (sceneId) => {
+    const affectedShots = project.storyboard.filter((shot) => shot.sceneId === sceneId).length
+    const message = affectedShots
+      ? `删除该场景会解除 ${affectedShots} 个镜头的场景绑定，确定继续吗？`
+      : '确定删除该场景吗？'
+    if (!window.confirm(message)) return
     updateProject((current) => ({
       script: {
         ...current.script,
@@ -76,6 +81,7 @@ export default function VideoStudio() {
   }
 
   const deleteShot = (shotId) => {
+    if (!window.confirm('确定删除该镜头吗？')) return
     updateProject((current) => ({ storyboard: current.storyboard.filter((shot) => shot.id !== shotId) }))
   }
 
@@ -93,28 +99,34 @@ export default function VideoStudio() {
           <p className="text-xs uppercase tracking-[0.35em] text-blue-300">Video Studio</p>
           <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
+              <label className="sr-only" htmlFor="video-project-name">项目名称</label>
               <input
+                id="video-project-name"
                 value={project.projectName}
                 onChange={(event) => updateProject({ projectName: event.target.value })}
-                className="w-full max-w-3xl rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-3xl font-semibold outline-none focus:border-blue-500"
+                className="w-full max-w-3xl rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-2xl font-semibold outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500 sm:text-3xl"
               />
+              <label className="sr-only" htmlFor="video-script-title">剧本标题</label>
               <input
+                id="video-script-title"
                 value={project.script.title || ''}
                 onChange={(event) => updateScript({ title: event.target.value })}
                 placeholder="剧本标题"
-                className="mt-3 w-full max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                className="mt-3 w-full max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-sm outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500"
               />
+              <label className="sr-only" htmlFor="video-script-synopsis">剧本梗概</label>
               <textarea
+                id="video-script-synopsis"
                 value={project.script.synopsis || ''}
                 onChange={(event) => updateScript({ synopsis: event.target.value })}
                 placeholder="剧本梗概"
                 rows={3}
-                className="mt-3 w-full max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-blue-500"
+                className="mt-3 w-full max-w-3xl rounded-lg border border-zinc-800 bg-zinc-950/70 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500"
               />
             </div>
-            <div className="flex gap-2">
-              <button onClick={addShot} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm hover:bg-zinc-800">添加镜头</button>
-              <button onClick={enqueueExport} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500">创建导出任务</button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <button onClick={addShot} className="rounded-lg border border-zinc-700 px-4 py-2 text-sm transition hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950">添加镜头</button>
+              <button onClick={enqueueExport} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium transition hover:bg-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950">创建导出任务</button>
             </div>
           </div>
         </header>
@@ -125,39 +137,56 @@ export default function VideoStudio() {
             <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-medium text-zinc-200">场景</h3>
-                <button onClick={addScene} className="rounded-lg border border-zinc-700 px-3 py-1 text-xs hover:bg-zinc-800">添加场景</button>
+                <button onClick={addScene} className="rounded-lg border border-zinc-700 px-3 py-1 text-xs transition hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950">添加场景</button>
               </div>
               <div className="mt-3 space-y-2">
                 {(project.script.scenes || []).map((scene) => (
-                  <div key={scene.id} className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 md:grid-cols-[0.8fr_1fr_auto]">
-                    <input value={scene.title || ''} onChange={(event) => updateScene(scene.id, { title: event.target.value })} className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm outline-none focus:border-blue-500" />
-                    <input value={scene.summary || ''} onChange={(event) => updateScene(scene.id, { summary: event.target.value })} placeholder="场景摘要" className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm outline-none focus:border-blue-500" />
-                    <button onClick={() => deleteScene(scene.id)} className="rounded border border-red-900/70 px-2 py-1 text-xs text-red-200 hover:bg-red-950/40">删除</button>
+                  <div key={scene.id} className="grid gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 lg:grid-cols-[0.8fr_1fr_auto]">
+                    <label className="sr-only" htmlFor={`scene-title-${scene.id}`}>场景标题</label>
+                    <input id={`scene-title-${scene.id}`} value={scene.title || ''} onChange={(event) => updateScene(scene.id, { title: event.target.value })} className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500" />
+                    <label className="sr-only" htmlFor={`scene-summary-${scene.id}`}>场景摘要</label>
+                    <input id={`scene-summary-${scene.id}`} value={scene.summary || ''} onChange={(event) => updateScene(scene.id, { summary: event.target.value })} placeholder="场景摘要" className="rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500" />
+                    <button onClick={() => deleteScene(scene.id)} aria-label={`删除场景 ${scene.title || scene.id}`} className="rounded border border-red-900/70 px-2 py-1 text-xs text-red-200 transition hover:bg-red-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950">删除</button>
                   </div>
                 ))}
+                {!project.script.scenes?.length ? (
+                  <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-950/40 p-4 text-sm text-zinc-400" role="status">
+                    暂无场景，点击“添加场景”开始编排剧本结构。
+                  </div>
+                ) : null}
               </div>
             </div>
             <div className="mt-4 space-y-3">
               {project.storyboard.map((shot) => (
                 <article key={shot.id} className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="grid flex-1 gap-2 md:grid-cols-[1fr_120px_150px]">
-                      <input value={shot.title || ''} onChange={(event) => updateShot(shot.id, { title: event.target.value })} className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm font-medium outline-none focus:border-blue-500" />
-                      <input type="number" min="0.1" step="0.1" value={shot.duration || 0} onChange={(event) => updateShot(shot.id, { duration: Math.max(0.1, Number(event.target.value) || 0.1) })} className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm outline-none focus:border-blue-500" />
-                      <select value={shot.sceneId || ''} onChange={(event) => updateShot(shot.id, { sceneId: event.target.value })} className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm outline-none focus:border-blue-500">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="grid flex-1 gap-2 lg:grid-cols-[1fr_120px_150px]">
+                      <label className="sr-only" htmlFor={`shot-title-${shot.id}`}>镜头标题</label>
+                      <input id={`shot-title-${shot.id}`} value={shot.title || ''} onChange={(event) => updateShot(shot.id, { title: event.target.value })} className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm font-medium outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500" />
+                      <label className="sr-only" htmlFor={`shot-duration-${shot.id}`}>镜头时长，单位秒</label>
+                      <input id={`shot-duration-${shot.id}`} aria-label="镜头时长，单位秒" type="number" min="0.1" step="0.1" value={shot.duration || 0} onChange={(event) => updateShot(shot.id, { duration: Math.max(0.1, Number(event.target.value) || 0.1) })} className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500" />
+                      <label className="sr-only" htmlFor={`shot-scene-${shot.id}`}>镜头绑定场景</label>
+                      <select id={`shot-scene-${shot.id}`} value={shot.sceneId || ''} onChange={(event) => updateShot(shot.id, { sceneId: event.target.value })} className="rounded border border-zinc-800 bg-zinc-900 px-2 py-1 text-sm outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500">
                         <option value="">未绑定场景</option>
                         {(project.script.scenes || []).map((scene) => <option key={scene.id} value={scene.id}>{scene.title || scene.id}</option>)}
                       </select>
                     </div>
-                    <span className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] text-zinc-300">{shot.id}</span>
+                    <span className="self-start rounded-full bg-zinc-800 px-2 py-1 text-[11px] text-zinc-300">{shot.id}</span>
                   </div>
-                  <textarea value={shot.prompt || ''} onChange={(event) => updateShot(shot.id, { prompt: event.target.value })} placeholder="等待填写镜头提示词" rows={3} className="mt-3 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-blue-500" />
-                  <div className="mt-3 flex items-center justify-between text-xs text-zinc-500">
+                  <label className="sr-only" htmlFor={`shot-prompt-${shot.id}`}>镜头提示词</label>
+                  <textarea id={`shot-prompt-${shot.id}`} value={shot.prompt || ''} onChange={(event) => updateShot(shot.id, { prompt: event.target.value })} placeholder="等待填写镜头提示词" rows={3} className="mt-3 w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500" />
+                  <div className="mt-3 flex flex-col gap-2 text-xs text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
                     <span>{shot.duration}s · {shot.status}</span>
-                    <button onClick={() => deleteShot(shot.id)} className="rounded border border-red-900/70 px-2 py-1 text-red-200 hover:bg-red-950/40">删除镜头</button>
+                    <button onClick={() => deleteShot(shot.id)} aria-label={`删除镜头 ${shot.title || shot.id}`} className="rounded border border-red-900/70 px-2 py-1 text-red-200 transition hover:bg-red-950/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950">删除镜头</button>
                   </div>
                 </article>
               ))}
+              {!project.storyboard.length ? (
+                <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 p-6 text-center" role="status">
+                  <h3 className="text-sm font-medium text-zinc-200">暂无镜头</h3>
+                  <p className="mt-2 text-sm text-zinc-400">点击“添加镜头”创建第一个分镜。</p>
+                </div>
+              ) : null}
             </div>
           </div>
 

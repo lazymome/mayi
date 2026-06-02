@@ -266,17 +266,47 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
     emitCameraChange({ fov: cameraStateRef.current.fov + event.deltaY * 0.04 });
   };
 
-  const currentCamera = normalizeCamera(camera);
+  const handleKeyDown = (event) => {
+    if (!imageUrl) return;
+
+    const keyActions = {
+      ArrowLeft: () => ({ yaw: cameraStateRef.current.yaw - 5 }),
+      ArrowRight: () => ({ yaw: cameraStateRef.current.yaw + 5 }),
+      ArrowUp: () => ({ pitch: cameraStateRef.current.pitch + 5 }),
+      ArrowDown: () => ({ pitch: cameraStateRef.current.pitch - 5 }),
+      '+': () => ({ fov: cameraStateRef.current.fov - 5 }),
+      '=': () => ({ fov: cameraStateRef.current.fov - 5 }),
+      '-': () => ({ fov: cameraStateRef.current.fov + 5 }),
+      Home: () => ({ yaw: 0, pitch: 0, fov: 65 }),
+    };
+
+    const action = keyActions[event.key];
+    if (!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    emitCameraChange(action());
+    onCameraChange?.(cameraStateRef.current);
+  };
+
+  const currentCamera = normalizeCamera(cameraStateRef.current);
+  const helperText = imageUrl
+    ? "拖拽调整视角，滚轮调整焦距。键盘可用方向键调整视角，+/- 缩放，Home 重置。"
+    : placeholder;
 
   return (
     <div
-      className={`relative h-full w-full overflow-hidden ${className}`}
+      className={`relative h-full w-full overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${className}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onWheel={handleWheel}
-      title={imageUrl ? "拖拽调整视角，滚轮调整焦距" : placeholder}
+      onKeyDown={handleKeyDown}
+      tabIndex={imageUrl ? 0 : undefined}
+      role={imageUrl ? "application" : undefined}
+      aria-label={label ? `全景查看器：${label}` : "全景查看器"}
+      aria-describedby="panorama-viewer-help"
+      title={helperText}
     >
       <div ref={containerRef} className="absolute inset-0" />
       {!imageUrl && (
@@ -289,6 +319,9 @@ const PanoramaViewer = forwardRef(function PanoramaViewer(
           <div className="pointer-events-none absolute inset-3 border-2 border-white/80 shadow-[0_0_0_999px_rgba(0,0,0,0.18)]" />
           <div className="pointer-events-none absolute left-1 bottom-1 rounded bg-black/60 px-1 py-0.5 text-[9px] text-white">
             yaw {Math.round(currentCamera.yaw)} / pitch {Math.round(currentCamera.pitch)} / fov {Math.round(currentCamera.fov)}
+          </div>
+          <div id="panorama-viewer-help" className="sr-only">
+            {helperText}
           </div>
           {label && (
             <div className="pointer-events-none absolute right-1 top-1 rounded bg-black/55 px-1 py-0.5 text-[9px] text-white">
