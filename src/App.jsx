@@ -7,8 +7,6 @@ import React, {
   memo,
 } from "react";
 import { createPortal } from "react-dom";
-import { marked } from "marked";
-import DOMPurify from "dompurify";
 // V3.5.20-1: Direct icon imports for better performance (eliminates wrapper overhead)
 import {
   Plus,
@@ -102,6 +100,10 @@ import {
   shouldAutoRunTapnowTool,
 } from "./mcp/toolPolicy";
 import PanoramaViewer from "./components/panorama/PanoramaViewer";
+import TagListEditor from "./components/forms/TagListEditor";
+import LazyBase64Image from "./components/media/LazyBase64Image";
+import ResolvedVideo from "./components/media/ResolvedVideo";
+import HistoryMjImageCell from "./features/history/components/HistoryMjImageCell";
 import {
   normalizeModelRoute,
   normalizePricing,
@@ -121,474 +123,28 @@ import {
 } from "./api/protocols";
 import MaskVisualFeedback from "./features/canvas/components/MaskVisualFeedback";
 import ArtisticProgress from "./features/canvas/components/ArtisticProgress";
+import LocalImageManager from "./features/canvas/services/localImageManager";
+import { dataUrlToBlob, normalizeDataUrl } from "./features/canvas/utils/dataUrl";
+import { renderMarkdownHtml } from "./features/canvas/utils/markdown";
+import {
+  PANORAMA_ASPECT_OPTIONS,
+  PANORAMA_FOCAL_PRESETS,
+  createPanoramaBackground,
+  focalLengthToFov,
+  getDefaultPanoramaCamera,
+  getPanoramaCameraSize,
+  getPanoramaPreviewStyle,
+  getShotPanoramaStage,
+  normalizePanoramaCamera,
+  renderEquirectangularFrame,
+} from "./features/canvas/utils/panorama";
+import { truncateByBytes } from "./features/canvas/utils/text";
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
 const t = i18n.t.bind(i18n);
 
-const MARKDOWN_HTML_CACHE_LIMIT = 120;
-const markdownHtmlCache = new Map();
-
-const renderMarkdownHtml = (content) => {
-  const raw = String(content || "");
-  if (!raw) return "";
-  const cached = markdownHtmlCache.get(raw);
-  if (cached) return cached;
-
-  const sanitized = DOMPurify.sanitize(marked.parse(raw));
-  const html = sanitized
-    .replace(/<table/g, '<div class="markdown-table-scroll"><table')
-    .replace(/<\/table>/g, "</table></div>");
-
-  markdownHtmlCache.set(raw, html);
-  if (markdownHtmlCache.size > MARKDOWN_HTML_CACHE_LIMIT) {
-    const firstKey = markdownHtmlCache.keys().next().value;
-    markdownHtmlCache.delete(firstKey);
-  }
-  return html;
-};
-
-// --- V3.5.16: LocalImageManager - IndexedDB-based image storage ---
-// Replaces localStorage Base64 storage with IndexedDB for better performance and larger capacity
-const LocalImageManager = (() => {
-  const DB_NAME = "tapnow_images_db";
-  const DB_VERSION = 1;
-  const STORE_NAME = "images";
-  let dbInstance = null;
-  let dbInitPromise = null;
-  const blobUrlCache = new Map(); // Cache: id -> blobUrl
-
-  const initDB = () => {
-    if (dbInitPromise) return dbInitPromise;
-
-    dbInitPromise = new Promise((resolve, reject) => {
-      if (!window.indexedDB) {
-        console.warn(
-          "[LocalImageManager] IndexedDB not supported, falling back to memory"
-        );
-        resolve(null);
-        return;
-      }
-
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-      request.onerror = (event) => {
-        console.error(
-          "[LocalImageManager] IndexedDB init failed:",
-          event.target.error
-        );
-        resolve(null);
-      };
-
-      request.onsuccess = (event) => {
-        dbInstance = event.target.result;
-        console.log("[LocalImageManager] IndexedDB initialized");
-        resolve(dbInstance);
-      };
-
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
-          store.createIndex("timestamp", "timestamp", { unique: false });
-          console.log("[LocalImageManager] Object store created");
-        }
-      };
-    });
-
-    return dbInitPromise;
-  };
-
-  // Generate unique ID for image
-  const generateId = () =>
-    `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-  // Save image (Base64 or Blob) to IndexedDB
-  const saveImage = async (data, existingId = null) => {
-    const db = await initDB();
-    if (!db) return null;
-
-    const id = existingId || generateId();
-
-    return new Promise((resolve, reject) => {
-      try {
-        let blob;
-        if (typeof data === "string" && data.startsWith("data:")) {
-          // Convert Base64 to Blob
-          const parts = data.split(",");
-          const mime = parts[0].match(/:(.*?);/)?.[1] || "image/png";
-          const binaryStr = atob(parts[1]);
-          const bytes = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) {
-            bytes[i] = binaryStr.charCodeAt(i);
-          }
-          blob = new Blob([bytes], { type: mime });
-        } else if (data instanceof Blob) {
-          blob = data;
-        } else {
-          console.warn("[LocalImageManager] Invalid data type for saveImage");
-          resolve(null);
-          return;
-        }
-
-        const transaction = db.transaction([STORE_NAME], "readwrite");
-        const store = transaction.objectStore(STORE_NAME);
-
-        const record = {
-          id,
-          blob,
-          timestamp: Date.now(),
-          size: blob.size,
-        };
-
-        const request = store.put(record);
-
-        request.onsuccess = () => {
-          resolve(id);
-        };
-
-        request.onerror = (event) => {
-          console.error("[LocalImageManager] Save failed:", event.target.error);
-          resolve(null);
-        };
-      } catch (err) {
-        console.error("[LocalImageManager] Save error:", err);
-        resolve(null);
-      }
-    });
-  };
-
-  // Get image as Blob URL from IndexedDB
-  const getImage = async (id) => {
-    // Check cache first
-    if (blobUrlCache.has(id)) {
-      return blobUrlCache.get(id);
-    }
-
-    const db = await initDB();
-    if (!db) return null;
-
-    return new Promise((resolve) => {
-      try {
-        const transaction = db.transaction([STORE_NAME], "readonly");
-        const store = transaction.objectStore(STORE_NAME);
-        const request = store.get(id);
-
-        request.onsuccess = () => {
-          const record = request.result;
-          if (record && record.blob) {
-            // V3.7.32 Fix: Use FileReader to return Base64 avoiding blob:null security error in file:// protocol
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const base64 = reader.result;
-              blobUrlCache.set(id, base64);
-              resolve(base64);
-            };
-            reader.onerror = () => {
-              console.error(
-                "[LocalImageManager] Failed to convert blob to base64"
-              );
-              resolve(null);
-            };
-            reader.readAsDataURL(record.blob);
-          } else {
-            resolve(null);
-          }
-        };
-
-        request.onerror = () => resolve(null);
-      } catch (err) {
-        console.error("[LocalImageManager] Get error:", err);
-        resolve(null);
-      }
-    });
-  };
-
-  // Delete image from IndexedDB
-  const deleteImage = async (id) => {
-    const db = await initDB();
-    if (!db) return false;
-
-    // Revoke cached blob URL (only if it is a blob url)
-    if (blobUrlCache.has(id)) {
-      const url = blobUrlCache.get(id);
-      if (url && url.startsWith("blob:")) {
-        URL.revokeObjectURL(url);
-      }
-      blobUrlCache.delete(id);
-    }
-
-    return new Promise((resolve) => {
-      const transaction = db.transaction([STORE_NAME], "readwrite");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.delete(id);
-      request.onsuccess = () => resolve(true);
-      request.onerror = () => resolve(false);
-    });
-  };
-
-  // Get storage stats
-  const getStats = async () => {
-    const db = await initDB();
-    if (!db) return { count: 0, totalSize: 0 };
-
-    return new Promise((resolve) => {
-      const transaction = db.transaction([STORE_NAME], "readonly");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const records = request.result || [];
-        const totalSize = records.reduce((sum, r) => sum + (r.size || 0), 0);
-        resolve({ count: records.length, totalSize });
-      };
-
-      request.onerror = () => resolve({ count: 0, totalSize: 0 });
-    });
-  };
-
-  // Check if ID is an image reference
-  const isImageId = (str) => typeof str === "string" && str.startsWith("img_");
-
-  // V3.7.19: Removed auto-init on module load - now lazy-loaded on first use
-  // initDB();
-
-  return { saveImage, getImage, deleteImage, getStats, isImageId, initDB };
-})();
-
-// Expose for debugging
-window.LocalImageManager = LocalImageManager;
-
-const normalizeDataUrl = (value) => {
-  if (!value || typeof value !== "string") return value;
-  if (!value.startsWith("data:")) return value;
-  const cleaned = value.replace(/\s+/g, "");
-  const match = cleaned.match(/^data:([^;,]+)(;base64)?,(.*)$/i);
-  if (!match) return cleaned;
-  const mime = match[1] || "application/octet-stream";
-  const isBase64 = !!match[2];
-  if (!isBase64) return cleaned;
-  const payload = normalizeBase64Payload(match[3] || "");
-  if (!payload) return cleaned;
-  return `data:${mime};base64,${payload}`;
-};
-
-const normalizeBase64Payload = (value) => {
-  if (!value) return "";
-  let cleaned = value.replace(/\s+/g, "");
-  if (/%[0-9A-Fa-f]{2}/.test(cleaned)) {
-    try {
-      cleaned = decodeURIComponent(cleaned);
-    } catch (e) {
-      // Keep original when decode fails.
-    }
-  }
-  cleaned = cleaned.replace(/-/g, "+").replace(/_/g, "/");
-  cleaned = cleaned.replace(/[^A-Za-z0-9+/=]/g, "");
-  const pad = cleaned.length % 4;
-  if (pad) cleaned += "=".repeat(4 - pad);
-  return cleaned;
-};
-
-const dataUrlToBlob = (dataUrl) => {
-  const normalized = normalizeDataUrl(dataUrl);
-  const match = normalized.match(/^data:([^;,]+)(;base64)?,(.*)$/i);
-  if (!match) return null;
-  const mime = match[1] || "application/octet-stream";
-  const isBase64 = !!match[2];
-  let data = match[3] || "";
-  if (!isBase64) {
-    try {
-      return new Blob([decodeURIComponent(data)], { type: mime });
-    } catch (e) {
-      return new Blob([data], { type: mime });
-    }
-  }
-  data = normalizeBase64Payload(data);
-  let binary = "";
-  try {
-    binary = atob(data);
-  } catch (e) {
-    return null;
-  }
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new Blob([bytes], { type: mime });
-};
-
-const PANORAMA_ASPECT_OPTIONS = ["16:9", "9:16", "1:1", "2.35:1"];
-const PANORAMA_FOCAL_PRESETS = [14, 24, 35, 50, 85];
-
-const getDefaultPanoramaCamera = () => ({
-  yaw: 0,
-  pitch: 0,
-  fov: 65,
-  focalLength: 28,
-  aspectRatio: "16:9",
-  width: 1280,
-  height: 720,
-});
-
-const normalizePanoramaCamera = (camera = {}) => {
-  const defaults = getDefaultPanoramaCamera();
-  const next = { ...defaults, ...(camera || {}) };
-  next.yaw = Number.isFinite(Number(next.yaw))
-    ? Number(next.yaw)
-    : defaults.yaw;
-  next.pitch = Number.isFinite(Number(next.pitch))
-    ? Math.max(-85, Math.min(85, Number(next.pitch)))
-    : defaults.pitch;
-  next.fov = Number.isFinite(Number(next.fov))
-    ? Math.max(20, Math.min(120, Number(next.fov)))
-    : defaults.fov;
-  next.focalLength = Number.isFinite(Number(next.focalLength))
-    ? Math.max(8, Math.min(200, Number(next.focalLength)))
-    : defaults.focalLength;
-  next.aspectRatio = PANORAMA_ASPECT_OPTIONS.includes(next.aspectRatio)
-    ? next.aspectRatio
-    : defaults.aspectRatio;
-  next.width = Number.isFinite(Number(next.width))
-    ? Math.max(320, Math.min(4096, Math.round(Number(next.width))))
-    : defaults.width;
-  next.height = Number.isFinite(Number(next.height))
-    ? Math.max(320, Math.min(4096, Math.round(Number(next.height))))
-    : defaults.height;
-  return next;
-};
-
-const getPanoramaAspectValue = (ratio = "16:9") => {
-  if (ratio === "2.35:1") return 2.35;
-  const [w, h] = String(ratio).split(":").map(Number);
-  return w && h ? w / h : 16 / 9;
-};
-
-const getPanoramaCameraSize = (camera = {}) => {
-  const normalized = normalizePanoramaCamera(camera);
-  const aspect = getPanoramaAspectValue(normalized.aspectRatio);
-  let width = normalized.width;
-  let height = Math.round(width / aspect);
-  if (height < 320) {
-    height = 320;
-    width = Math.round(height * aspect);
-  }
-  return { width, height };
-};
-
-const focalLengthToFov = (focalLength) => {
-  const focal = Number(focalLength) || 28;
-  return Math.round((2 * Math.atan(36 / (2 * focal)) * 180) / Math.PI);
-};
-
-const createPanoramaBackground = (url, name = "") => ({
-  id: `pano_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-  name: name || `全景背景 ${new Date().toLocaleTimeString()}`,
-  imageUrl: url,
-  projection: "equirectangular",
-  source: "uploaded",
-  createdAt: Date.now(),
-});
-
-const getShotPanoramaStage = (shot = {}) => {
-  const stage = shot.stage || {};
-
-  return {
-    backgroundId: "",
-    backgroundUrl: "",
-    captureUrl: "",
-    captureUpdatedAt: null,
-    ...stage,
-    camera: normalizePanoramaCamera(stage.camera || shot.cameraParams),
-    redraw: {
-      status: "idle",
-      outputImages: [],
-      outputUrl: "",
-      ...(stage.redraw || {}),
-    },
-  };
-};
-
-const getPanoramaPreviewStyle = (imageUrl, camera = {}) => {
-  const normalized = normalizePanoramaCamera(camera);
-  const cropW = Math.max(12, Math.min(85, normalized.fov));
-  const cropH = Math.max(12, Math.min(85, normalized.fov * 0.56));
-  const x = (((normalized.yaw % 360) + 360) % 360) / 360;
-  const y = (90 - normalized.pitch) / 180;
-  return {
-    backgroundImage: imageUrl ? `url(${imageUrl})` : undefined,
-    backgroundSize: `${10000 / cropW}% ${10000 / cropH}%`,
-    backgroundPosition: `${Math.max(0, Math.min(100, x * 100))}% ${Math.max(
-      0,
-      Math.min(100, y * 100)
-    )}%`,
-  };
-};
-
-const renderEquirectangularFrame = async (imageUrl, camera = {}) => {
-  const normalized = normalizePanoramaCamera(camera);
-  const { width, height } = getPanoramaCameraSize(normalized);
-  const image = await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("全景背景加载失败"));
-    img.src = imageUrl;
-  });
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("无法创建截图画布");
-
-  const yawCenter =
-    ((((normalized.yaw % 360) + 360) % 360) / 360) * image.width;
-  const pitchCenter = ((90 - normalized.pitch) / 180) * image.height;
-  const cropW = Math.max(1, (normalized.fov / 360) * image.width);
-  const cropH = Math.max(1, (normalized.fov / 180) * image.height);
-  const sx = yawCenter - cropW / 2;
-  const sy = Math.max(
-    0,
-    Math.min(image.height - cropH, pitchCenter - cropH / 2)
-  );
-
-  const drawPart = (sourceX, sourceW, destX, destW) => {
-    ctx.drawImage(image, sourceX, sy, sourceW, cropH, destX, 0, destW, height);
-  };
-
-  if (sx < 0) {
-    const leftW = -sx;
-    const rightW = cropW - leftW;
-    drawPart(image.width - leftW, leftW, 0, (leftW / cropW) * width);
-    drawPart(0, rightW, (leftW / cropW) * width, (rightW / cropW) * width);
-  } else if (sx + cropW > image.width) {
-    const rightW = image.width - sx;
-    const leftW = cropW - rightW;
-    drawPart(sx, rightW, 0, (rightW / cropW) * width);
-    drawPart(0, leftW, (rightW / cropW) * width, (leftW / cropW) * width);
-  } else {
-    drawPart(sx, cropW, 0, width);
-  }
-
-  return canvas.toDataURL("image/png");
-};
-
-const truncateByBytes = (value, maxBytes) => {
-  if (!value || !maxBytes || maxBytes <= 0) return value || "";
-  const encoder = new TextEncoder();
-  let used = 0;
-  let output = "";
-  for (const ch of value) {
-    const size = encoder.encode(ch).length;
-    if (used + size > maxBytes) break;
-    output += ch;
-    used += size;
-  }
-  if (output.length < value.length) return `${output}...`;
-  return output;
-};
-
 // --- LazyBase64Image 组件：将 Base64 转换为 Blob URL 的智能图片组件 ---
-const LazyBase64Image = ({
+const LegacyLazyBase64Image = ({
   src,
   className,
   alt,
@@ -735,7 +291,7 @@ const LazyBase64Image = ({
   );
 };
 
-const ResolvedVideo = ({
+const LegacyResolvedVideo = ({
   src,
   className,
   onError,
@@ -785,7 +341,7 @@ const ResolvedVideo = ({
   );
 };
 
-const HistoryMjImageCell = memo(
+const LegacyHistoryMjImageCell = memo(
   ({
     item,
     idx,
@@ -882,7 +438,7 @@ const HistoryMjImageCell = memo(
   }
 );
 
-const TagListEditor = ({
+const LegacyTagListEditor = ({
   label,
   values,
   onChange,
